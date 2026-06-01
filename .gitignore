@@ -1,0 +1,8 @@
+node_modules/
+dist/
+data/
+bot-run.log
+bot-err.log
+bot-out.log
+.env
+*.log
