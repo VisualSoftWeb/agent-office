@@ -1,6 +1,7 @@
 import { Telegraf, Context } from "telegraf";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
+import { processUserMessage } from "../agent/loop.js";
 
 export type BotContext = Context;
 
@@ -80,9 +81,10 @@ async function startPolling(): Promise<void> {
       logger.debug(`getUpdates returned ${updates.length} updates`);
 
       for (const update of updates) {
-        offset = Math.max(offset, update.update_id + 1);
-
-        if (!update.message || !update.message.text) continue;
+        if (!update.message || !update.message.text) {
+          offset = Math.max(offset, update.update_id + 1);
+          continue;
+        }
 
         const userId = update.message.from?.id?.toString() ?? "unknown";
         const text = update.message.text;
@@ -94,16 +96,17 @@ async function startPolling(): Promise<void> {
         await sendReply(chatId, "⏳ Processando...").catch(() => logger.warn("sendReply processing failed"));
 
         try {
-          const { processUserMessage } = await import("../agent/loop.js");
           const result = await processUserMessage(userId, text, chatId);
           logger.info(`processUserMessage returned: "${result?.slice(0, 100)}..."`);
           await sendReply(chatId, result).catch((e) => {
             logger.error("Failed to send response:", e);
           });
           logger.info("sendReply completed successfully");
+          offset = Math.max(offset, update.update_id + 1);
         } catch (handlerErr) {
           logger.error("Handler error:", handlerErr);
           await sendReply(chatId, "Desculpe, ocorreu um erro inesperado. Já registrei para análise.").catch(() => {});
+          offset = Math.max(offset, update.update_id + 1);
         }
       }
     } catch (err: any) {

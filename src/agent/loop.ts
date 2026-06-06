@@ -18,11 +18,11 @@ const MODEL_RATES: Record<string, { input: number; output: number }> = {
   gpt: { input: 2.5 / 1_000_000, output: 10.0 / 1_000_000 },
   deepseek: { input: 0.27 / 1_000_000, output: 1.10 / 1_000_000 },
   ollama: { input: 0, output: 0 },
-  openrouter: { input: 2.0 / 1_000_000, output: 8.0 / 1_000_000 },
+  openrouter: { input: 0.0983 / 1_000_000, output: 0.1966 / 1_000_000 },
 };
 
 const MAX_ITERATIONS = 10;
-const MAX_EMPTY_RETRIES = 3;
+const MAX_EMPTY_RETRIES = 5;
 
 function buildSystemPrompt(soulContent: string, facts: string, semanticMemory: string): string {
   return `<soul>
@@ -100,6 +100,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
   const conversationId = generateId();
 
   let emptyResponseCount = 0;
+  let webSearchDone = false;
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     const hasToolResult = messages.some((m) => m.role === "tool");
@@ -195,10 +196,21 @@ export async function processUserMessage(userId: string, userMessage: string, ch
         if (toolName === "send_file") {
           try {
             const parsed = JSON.parse(toolArgs);
-            if (parsed.path) { args.filePath = parsed.path; delete args.query; }
+            if (parsed.filePath) { args.filePath = parsed.filePath; delete args.query; }
+            else if (parsed.path) { args.filePath = parsed.path; delete args.query; }
             else { args.filePath = toolArgs; delete args.query; }
           } catch {
             args.filePath = toolArgs;
+            delete args.query;
+          }
+        }
+        if (toolName === "read_file") {
+          try {
+            const parsed = JSON.parse(toolArgs);
+            if (parsed.path) { args.path = parsed.path; delete args.query; }
+            else { args.path = toolArgs; delete args.query; }
+          } catch {
+            args.path = toolArgs;
             delete args.query;
           }
         }
@@ -210,16 +222,21 @@ export async function processUserMessage(userId: string, userMessage: string, ch
       }
 
       // Auto-detect web search need (LLM didn't call any tool)
-      const searchTriggers = /\b(jogo|jogos|partida|resultado|not[íi]cia|clima|tempo|previs[ãa]o|campeonato|quem ganhou|[úu]ltimas?|placar|mundial|olimp[ií]adas|copa|brasileir[ãa]o|libertadores|futebol|f1|f[oó]rmula 1|ufc|boxe|vôlei|v[oó]lei|basquete|nba|nfl|t[ée]nis|news|breaking|live|stream|ao vivo|pre[çc]o|valor|cotação|cotação|ação|açao|bolsa|bitcoin|ethereum|moeda|d[óo]lar|euro|inflação|inflacao|eleição|eleicao|governo|presidente|ministro|congresso|senado|política|política|guerra|ataque|terremoto|furacão|furacao|enchente|pandemia|vacina|vacina|trump|lula|putin|zelensky|netanyahu|hamas|r[úu]ssia|ucrânia|ucrania|israel|gaza|china|eua|coreia|japão|japao|india|mudança|mudanca|tecnologia|lançamento|lancamento|bilheteria|oscar|grammy|bbb|reality|explosão|explosao|acidente|incêndio|incendio|desabamento|prisão|prisao|lei|projeto|votação|votacao|supremo|stf|congresso|senado|deputado|prefeito|governador|câmara|camara)/i;
-      const userNeedsWebSearch = searchTriggers.test(userMessage);
-      const llmExpressedUncertainty = /\b(n[ãa]o tenho|n[ãa]o sei|n[ãa]o encontrei|n[ãa]o possuo|n[ãa]o consigo|n[ãa]o tenho acesso|infelizmente|desculpe|não disponho|sem acesso|não foi possível|não tenho dados|não encontrei|não sei informar|não possuo informação|não tenho informação|peço desculpas|não posso|não consigo acessar|não tenho como|não está disponível|não disponível|não foi encontrado|não sei responder|não tenho conhecimento)\b/i;
-      if (userNeedsWebSearch || llmExpressedUncertainty.test(finalContent)) {
-        const searchQuery = userMessage.replace(/busca|pesquisa|procura|encontra|acha|abre|mostra|exibe|veja|olha/gi, "").trim();
-        logger.info(`Auto web_search triggered for: "${searchQuery}"`);
-        const result = await executeToolCall({ id: "auto_web_search", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: searchQuery || userMessage }) } });
-        messages.push({ role: "system", content: `Busca automática na web acionada. O usuário perguntou sobre "${userMessage}". Resultado da busca:\n` + result });
-        indexText(userId, `Auto web_search: "${searchQuery}" -> ${result}`);
-        continue;
+      const isProviderError = response.usage.total_tokens === 0 && finalContent.startsWith("⚠️");
+      if (!isProviderError) {
+        const searchTriggers = /\b(jogo|jogos|partida|resultado|not[íi]cia|clima|tempo|previs[ãa]o|campeonato|quem ganhou|[úu]ltimas?|placar|mundial|olimp[ií]adas|copa|brasileir[ãa]o|libertadores|futebol|f1|f[oó]rmula 1|ufc|boxe|vôlei|v[oó]lei|basquete|nba|nfl|t[ée]nis|news|breaking|live|stream|ao vivo|pre[çc]o|valor|cotação|cotação|ação|açao|bolsa|bitcoin|ethereum|moeda|d[óo]lar|euro|inflação|inflacao|eleição|eleicao|governo|presidente|ministro|congresso|senado|política|política|guerra|ataque|terremoto|furacão|furacao|enchente|pandemia|vacina|vacina|trump|lula|putin|zelensky|netanyahu|hamas|r[úu]ssia|ucrânia|ucrania|israel|gaza|china|eua|coreia|japão|japao|india|mudança|mudanca|tecnologia|lançamento|lancamento|bilheteria|oscar|grammy|bbb|reality|explosão|explosao|acidente|incêndio|incendio|desabamento|prisão|prisao|lei|projeto|votação|votacao|supremo|stf|congresso|senado|deputado|prefeito|governador|câmara|camara)/i;
+        const userNeedsWebSearch = searchTriggers.test(userMessage);
+        const llmExpressedUncertainty = /\b(n[ãa]o tenho|n[ãa]o sei|n[ãa]o encontrei|n[ãa]o possuo|n[ãa]o consigo|n[ãa]o tenho acesso|infelizmente|desculpe|não disponho|sem acesso|não foi possível|não tenho dados|não encontrei|não sei informar|não possuo informação|não tenho informação|peço desculpas|não posso|não consigo acessar|não tenho como|não está disponível|não disponível|não foi encontrado|não sei responder|não tenho conhecimento)\b/i;
+        if (!webSearchDone && (userNeedsWebSearch || llmExpressedUncertainty.test(finalContent))) {
+          webSearchDone = true;
+          const searchQuery = userMessage.replace(/busca|pesquisa|procura|encontra|acha|abre|mostra|exibe|veja|olha/gi, "").trim();
+          logger.info(`Auto web_search triggered for: "${searchQuery}"`);
+          const result = await executeToolCall({ id: "auto_web_search", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: searchQuery || userMessage }) } });
+          const truncatedResult = result.length > 2000 ? result.slice(0, 2000) + "\n... (resultado truncado)" : result;
+          messages.push({ role: "system", content: `Busca automática na web acionada. O usuário perguntou sobre "${userMessage}". Resultado da busca:\n${truncatedResult}` });
+          indexText(userId, `Auto web_search: "${searchQuery}" -> ${result}`);
+          continue;
+        }
       }
 
       addMessage({

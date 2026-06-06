@@ -32,8 +32,8 @@ registerTool("send_file", {
     },
   },
 }, async (args) => {
-  const filePath = String(args.filePath).trim();
-  if (!filePath) return `<tool-error>File path is required</tool-error>`;
+  const filePath = String(args.filePath ?? "").trim();
+  if (!filePath || filePath === "undefined") return `<tool-error>File path is required</tool-error>`;
 
   const chatId = currentChatId;
   if (!chatId) return `<tool-error>No chat context. Cannot send file.</tool-error>`;

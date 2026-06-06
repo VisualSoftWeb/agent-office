@@ -35,7 +35,8 @@ Return ONLY a JSON array of strings, each being a factual statement about the us
   ]);
 
   try {
-    const facts: string[] = JSON.parse(response.content ?? "[]");
+    const parsed = JSON.parse(response.content ?? "[]");
+    const facts: string[] = Array.isArray(parsed) ? parsed : [];
     for (const fact of facts) {
       upsertFact(userId, fact, "reflection");
     }

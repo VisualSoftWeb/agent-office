@@ -54,6 +54,8 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
 }
 
+const MAX_ENTRIES_PER_USER = 500;
+
 export async function indexText(userId: string, text: string): Promise<void> {
   const embedding = await embed(text);
   LOCAL_STORE.push({
@@ -63,6 +65,11 @@ export async function indexText(userId: string, text: string): Promise<void> {
     embedding,
     createdAt: new Date().toISOString(),
   });
+  const userCount = LOCAL_STORE.filter((r) => r.userId === userId).length;
+  if (userCount > MAX_ENTRIES_PER_USER) {
+    const idx = LOCAL_STORE.findIndex((r) => r.userId === userId);
+    if (idx !== -1) LOCAL_STORE.splice(idx, 1);
+  }
   logger.debug(`Indexed text (${text.length} chars) for user ${userId}`);
 }
 

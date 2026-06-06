@@ -1,17 +1,20 @@
 import Database from "better-sqlite3";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { generateId, nowISO } from "../utils/helpers.js";
 import { logger } from "../utils/logger.js";
 import type { MessageRecord, FactRecord, CostRecord } from "./schema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.resolve(__dirname, "../../data/agent.db");
+const DB_DIR = path.resolve(__dirname, "../../data");
+const DB_PATH = path.join(DB_DIR, "agent.db");
 
 let db: Database.Database | null = null;
 
 function getDB(): Database.Database {
   if (!db) {
+    fs.mkdirSync(DB_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.pragma("journal_mode = WAL");
     initSchema();

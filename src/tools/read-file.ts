@@ -41,7 +41,10 @@ registerTool("read_file", {
     },
   },
 }, async (args) => {
-  const filePath = String(args.path);
+  const filePath = String(args.path ?? "").trim();
+  if (!filePath || filePath === "undefined" || filePath.includes("\\undefined")) {
+    return `<tool-error>File path is missing or invalid. Please provide a valid absolute path.</tool-error>`;
+  }
 
   try {
     const s = await stat(filePath);

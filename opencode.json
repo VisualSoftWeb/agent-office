@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "meuprovedor": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "myprover",
+      "options": {
+        "baseURL": "http://localhost:3000/v1"
+      },
+      "models": {
+        "meu-modelo": {
+          "name": "deepseek-thinking"
+        }
+      }
+    }
+  }
+}

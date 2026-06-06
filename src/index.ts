@@ -1,3 +1,12 @@
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+process.on("unhandledRejection", (reason) => {
+  logger.error("Unhandled rejection:", reason instanceof Error ? reason.message : reason);
+});
+process.on("uncaughtException", (err) => {
+  logger.error("Uncaught exception:", err.message);
+});
+
 import { config } from "./config.js";
 import { logger } from "./utils/logger.js";
 import { launchBot, stopBot } from "./telegram/bot.js";
