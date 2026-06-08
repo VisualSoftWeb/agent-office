@@ -4,6 +4,43 @@
  * Robust JSON parsing utilities
  */
 
+function sanitizeJsonEscapes(jsonStr: string): string {
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  
+  for (let i = 0; i < jsonStr.length; i++) {
+    const char = jsonStr[i];
+    
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      const nextChar = jsonStr[i + 1];
+      const validEscapes = '"\\\/bfnrtu';
+      
+      if (nextChar && validEscapes.includes(nextChar)) {
+        result += '\\' + nextChar;
+        i++;
+      } else {
+        result += '\\\\';
+      }
+      continue;
+    }
+    
+    if (char === '"') {
+      inString = !inString;
+    }
+    
+    result += char;
+  }
+  
+  return result;
+}
+
 export function robustParseJSON(str: string): any {
   let sanitized = str.trim();
   
@@ -16,6 +53,10 @@ export function robustParseJSON(str: string): any {
 
   let jsonPart = sanitized.substring(firstBrace);
   
+  // Sanitize unescaped backslashes in string values before parsing
+  // Handles Windows paths like C:\Users\... while preserving valid JSON escapes
+  jsonPart = sanitizeJsonEscapes(jsonPart);
+
   // Try parsing directly first
   try {
     return JSON.parse(jsonPart);

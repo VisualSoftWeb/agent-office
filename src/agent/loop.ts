@@ -62,14 +62,17 @@ When the user asks to open, show, send, view, or display a file in the chat, use
 - read_file: read any text file found. For images (PNG/JPEG) returns metadata.
 - send_file: send a file (image or document) directly to the Telegram chat. Use after finding a file with search_files.
 - web_search: current information from the internet.
+- delete_file: delete a file or empty folder. FIRST call WITHOUT confirm=true to preview what will be deleted. Then ASK THE USER "Confirma a exclusão?" and wait for a clear "sim" or "confirmo" response. Only on the SECOND call pass confirm=true to actually delete. NEVER call with confirm=true on the first attempt. For folders with contents, also add recursive=true and warn the user.
 
 How to call tools (write exactly like this):
   call search_files(pattern="*.pdf")
   call read_file(path="C:\pasta\arquivo.txt")
   call send_file(path="C:\pasta\imagem.png")
   call web_search(query="resultado jogo Brasil ontem")
+  call delete_file(path="C:\pasta\arquivo.txt")
+  call delete_file(path="C:\pasta\arquivo.txt", confirm=true)
 After receiving a tool result, analyze it and respond.
-Do not execute destructive actions (delete, modify, execute) without explicit user approval.
+CRITICAL: Do NOT execute destructive actions (delete, modify, execute) without explicit user confirmation. Always use the two-step confirm pattern for delete_file.
 [/system-instructions]`;
 }
 
@@ -148,10 +151,10 @@ export async function processUserMessage(userId: string, userMessage: string, ch
     } else if (response.content !== null && response.content.trim().length > 0) {
       const finalContent = response.content.trim();
 
-      let textToolMatch = finalContent.match(/<(search_files|web_search|read_file|send_file)>([\s\S]*?)<\/(search_files|web_search|read_file|send_file)>/i);
+      let textToolMatch = finalContent.match(/<(search_files|web_search|read_file|send_file|delete_file)>([\s\S]*?)<\/(search_files|web_search|read_file|send_file|delete_file)>/i);
 
       if (!textToolMatch) {
-        const pythonMatch = finalContent.match(/```(?:python|bash|shell)?\s*\n?\s*(?:call\s+)?(search_files|web_search|read_file|send_file)\(\s*([\s\S]*?)\s*\)\s*\n?```/i);
+        const pythonMatch = finalContent.match(/```(?:python|bash|shell)?\s*\n?\s*(?:call\s+)?(search_files|web_search|read_file|send_file|delete_file)\(\s*([\s\S]*?)\s*\)\s*\n?```/i);
         if (pythonMatch) {
           const toolName = pythonMatch[1].toLowerCase();
           let rawArgs = pythonMatch[2].trim();
@@ -165,7 +168,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
       }
 
       if (!textToolMatch) {
-        const inlineMatch = finalContent.match(/(?:call\s+)?(search_files|web_search|read_file|send_file)\s*\(\s*((?:[^)]|\\\))*)\s*\)/i);
+        const inlineMatch = finalContent.match(/(?:call\s+)?(search_files|web_search|read_file|send_file|delete_file)\s*\(\s*((?:[^)]|\\\))*)\s*\)/i);
         if (inlineMatch && inlineMatch.index !== undefined) {
           const toolName = inlineMatch[1].toLowerCase();
           let rawArgs = inlineMatch[2].trim();
@@ -211,6 +214,20 @@ export async function processUserMessage(userId: string, userMessage: string, ch
             else { args.path = toolArgs; delete args.query; }
           } catch {
             args.path = toolArgs;
+            delete args.query;
+          }
+        }
+        if (toolName === "delete_file") {
+          try {
+            const parsed = JSON.parse(toolArgs);
+            args.path = parsed.path || parsed.filePath || toolArgs;
+            args.confirm = parsed.confirm === true;
+            args.recursive = parsed.recursive === true;
+            delete args.query;
+          } catch {
+            args.path = toolArgs;
+            args.confirm = false;
+            args.recursive = false;
             delete args.query;
           }
         }

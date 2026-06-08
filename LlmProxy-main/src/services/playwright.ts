@@ -1,12 +1,4 @@
-/*
- * File: playwright.ts
- * Project: deepsproxy
- * Author: Pedro Farias
- * Created: 2026-05-09
- * 
- * Last Modified: Sat May 09 2026
- * Modified By: Pedro Farias
- */
+
 
 import { chromium, BrowserContext, Page } from 'playwright';
 import path from 'path';
@@ -14,6 +6,35 @@ import path from 'path';
 let context: BrowserContext | null = null;
 export let activePage: Page | null = null;
 let currentHeaders: Record<string, string> = {};
+let isInitializing = false;
+
+async function isPageAlive(): Promise<boolean> {
+  if (!activePage || !context) return false;
+  try {
+    await activePage.evaluate(() => true);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensurePlaywrightReady(headless = true) {
+  if (isInitializing) {
+    while (isInitializing) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return;
+  }
+  if (await isPageAlive()) return;
+
+  isInitializing = true;
+  try {
+    await closePlaywright();
+    await initPlaywright(headless);
+  } finally {
+    isInitializing = false;
+  }
+}
 
 export async function initPlaywright(headless = true) {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return;
@@ -24,6 +45,7 @@ export async function initPlaywright(headless = true) {
   const profilePath = path.resolve('deepseek_profile');
 
   context = await chromium.launchPersistentContext(profilePath, {
+    channel: 'chrome',
     headless,
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
     args: [
@@ -54,16 +76,16 @@ export async function closePlaywright() {
  */
 export async function getDeepSeekHeaders(forceNew = false): Promise<{ headers: Record<string, string>, chatSessionId: string, parentMessageId: number | null }> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) {
-    // Generate a unique session ID if requested for testing isolation
     const mockSessionId = process.env.TEST_SESSION_ID || 'mock-session';
     return { headers: { authorization: 'Bearer MOCK' }, chatSessionId: mockSessionId, parentMessageId: null };
   }
+
+  await ensurePlaywrightReady();
 
   if (!activePage) {
     throw new Error('Playwright not initialized');
   }
 
-  // Navigate to deepseek chat. If forceNew is true or we're not on deepseek, go to home page.
   const currentUrl = activePage.url();
   const isOnDeepSeek = currentUrl.includes('chat.deepseek.com');
   const isOnSpecificChat = isOnDeepSeek && /\/chat\/\d+/.test(currentUrl);
@@ -115,7 +137,7 @@ export async function getDeepSeekHeaders(forceNew = false): Promise<{ headers: R
 
     const routeHandler = async (route: any, request: any) => {
       clearTimeout(timeout);
-      
+
       const reqHeaders = request.headers();
       let uiSessionId = '';
       let uiParentMessageId: number | null = null;
@@ -147,7 +169,7 @@ export async function getDeepSeekHeaders(forceNew = false): Promise<{ headers: R
 
       // Abort to prevent polluting chat history
       await route.abort('aborted');
-      
+
       // Cleanup route
       await activePage!.unroute('**/api/v0/chat/completion', routeHandler);
 
