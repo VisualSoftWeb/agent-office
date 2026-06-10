@@ -41,9 +41,15 @@ async function getUpdates(offset: number): Promise<any[]> {
 }
 
 async function sendReply(chatId: number, text: string): Promise<void> {
+  // Log the full text we are about to send for debugging
+  logger.debug(`[sendReply] Full text to send (${text.length} chars): "${text.slice(0, 300)}..."`);
+
   const body: Record<string, any> = { chat_id: chatId, text };
-  for (const pm of ["Markdown", "HTML", null]) {
+  // Try Markdown first (LLM generates Markdown), then plain text
+  // Skip HTML — it corrupts Markdown text by misinterpreting * and # markers
+  for (const pm of ["Markdown", null]) {
     body.parse_mode = pm ?? undefined;
+    if (!pm) delete body.parse_mode;
     const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -51,7 +57,11 @@ async function sendReply(chatId: number, text: string): Promise<void> {
       signal: AbortSignal.timeout(15000),
     });
     const data: any = await res.json();
-    if (data.ok) return;
+    if (data.ok) {
+      logger.debug(`[sendReply] Sent successfully with parse_mode=${pm || 'none'}`);
+      return;
+    }
+    logger.warn(`[sendReply] Failed with parse_mode=${pm || 'none'}: ${data.description}`);
     if (pm !== null) continue;
     throw new Error(`sendMessage failed: ${data.description}`);
   }
@@ -97,7 +107,7 @@ async function startPolling(): Promise<void> {
 
         try {
           const result = await processUserMessage(userId, text, chatId);
-          logger.info(`processUserMessage returned: "${result?.slice(0, 100)}..."`);
+          logger.info(`processUserMessage returned (${result?.length} chars): "${result?.slice(0, 200)}..."`);
           await sendReply(chatId, result).catch((e) => {
             logger.error("Failed to send response:", e);
           });

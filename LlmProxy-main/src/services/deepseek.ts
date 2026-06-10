@@ -68,7 +68,7 @@ export async function createDeepSeekStream(
     prompt: prompt,
     ref_file_ids: [],
     thinking_enabled: enableThinking,
-    search_enabled: true,
+    search_enabled: false,
     preempt: false
   };
 
@@ -90,7 +90,7 @@ export async function createDeepSeekStream(
     },
     body: JSON.stringify(payload),
     dispatcher: insecureAgent
-  });
+  } as any);
 
   if (!response.ok || !response.body) {
     const errText = await response.text().catch(() => '');

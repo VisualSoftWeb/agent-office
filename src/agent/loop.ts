@@ -57,6 +57,13 @@ Correct examples:
 After finding files with search_files, use read_file to read their contents.
 When the user asks to open, show, send, view, or display a file in the chat, use send_file with the full file path to send it directly.
 
+=== SEND FILE (CRITICAL - READ CAREFULLY) ===
+You MUST call send_file(path="...") to send any file. 
+NEVER generate fake links like <file url="..."> or http://.../file.png. These DO NOT WORK.
+The ONLY way to send a file is by calling the send_file tool.
+After calling send_file, the system will return the result. Do NOT make up file URLs.
+If the file is not found by send_file, tell the user the exact error and suggest using search_files first.
+
 === TOOLS ===
 - search_files: find files by name/extension (PDF, PNG, JPEG, HTML, XML, TXT, etc.)
 - read_file: read any text file found. For images (PNG/JPEG) returns metadata.
@@ -73,7 +80,73 @@ How to call tools (write exactly like this):
   call delete_file(path="C:\pasta\arquivo.txt", confirm=true)
 After receiving a tool result, analyze it and respond.
 CRITICAL: Do NOT execute destructive actions (delete, modify, execute) without explicit user confirmation. Always use the two-step confirm pattern for delete_file.
+
+=== FORMATAÇÃO (OBRIGATÓRIO - LEIA ATENTAMENTE) ===
+Sua resposta será exibida no Telegram. Use formatação limpa e legível.
+
+REGRAS:
+1. SEMPRE separe parágrafos com linha em branco (ENTER duas vezes)
+2. Use **negrito** para títulos e destaques
+3. Use '$' para caminhos de arquivo e comandos (ex: $C:\\pasta\\arquivo.txt)
+4. Use - para listas
+5. NUNCA escreva um parágrafo gigante sem quebras - fica ILEGÍVEL
+
+EXEMPLO BOM (siga este formato):
+**Arquivo encontrado**
+- Nome: foto.png
+- Caminho: $C:\\Users\\Nome\\Desktop\\foto.png
+- Modificado: 2026-05-14 20:43
+
+EXEMPLO RUIM (NÃO faça isso):
+"Arquivo encontrado em C:\\Users\\Nome\\Desktop\\foto.png modificado em 2026-05-14 20:43 tamanho 3.3KB."
+
+OUTRO EXEMPLO BOM:
+**Resultado da busca**
+Foram encontrados 3 arquivos:
+1. relatorio.pdf - 2.1 MB
+2. foto.png - 3.3 KB
+3. notas.txt - 1.2 KB
+
+Lembre-se: linha em branco entre parágrafos, **negrito** para títulos, $ para caminhos.
 [/system-instructions]`;
+}
+
+function sanitizeResponse(text: string): string {
+  let r = text;
+
+  // 0. Protect URLs and absolute paths BEFORE any modifications
+  const protectedUrls: string[] = [];
+  r = r.replace(/(https?:\/\/[^\s]+)/g, (m) => {
+    protectedUrls.push(m);
+    return `__URL_${protectedUrls.length - 1}__`;
+  });
+  const protectedPaths: string[] = [];
+  r = r.replace(/([A-Za-z]:(?:\\[^<>:"|?*\s]+)+)/g, (m) => {
+    protectedPaths.push(m);
+    return `__PATH_${protectedPaths.length - 1}__`;
+  });
+
+  // 1. Ensure space after punctuation (. ! ?) when followed by a letter/number
+  r = r.replace(/([.!?])(?=[A-Za-zÀ-ÿ0-9])/g, "$1 ");
+
+  // 2. Ensure space after : when followed by a letter (but not in timestamps like 10:30)
+  r = r.replace(/:([A-Za-zÀ-ÿ])/g, ": $1");
+
+  // 3. Normalize multiple consecutive spaces into one (preserve newlines)
+  r = r.replace(/[ \t]{2,}/g, " ");
+
+  // 4. Normalize excessive newlines (3+ -> 2)
+  r = r.replace(/\n{3,}/g, "\n\n");
+
+  // 5. Restore protected items
+  protectedPaths.forEach((p, i) => {
+    r = r.replace(`__PATH_${i}__`, p);
+  });
+  protectedUrls.forEach((u, i) => {
+    r = r.replace(`__URL_${i}__`, u);
+  });
+
+  return r.trim();
 }
 
 export async function processUserMessage(userId: string, userMessage: string, chatId?: number): Promise<string> {
@@ -83,7 +156,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
   }
 
   const llm = getLLMProvider();
-  if (chatId) setSendFileChatId(chatId);
+  if (chatId) setSendFileChatId(userId, chatId);
 
   const soulContent = await readFile(path.resolve(__dirname, "../../soul.md"), "utf-8").catch(() => "No soul.md found.");
   const facts = getFacts(userId).map((f) => `- ${f.fact} (${f.category})`).join("\n");
@@ -130,7 +203,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
       messages.push({ role: "assistant", content: null, tool_calls: response.tool_calls });
 
       for (const tc of response.tool_calls) {
-        const result = await executeToolCall(tc);
+        const result = await executeToolCall(tc, userId);
         indexText(userId, `Tool call: ${tc.function.name}(${tc.function.arguments}) -> ${result}`);
         messages.push({
           role: "tool",
@@ -232,7 +305,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
           }
         }
         messages.push({ role: "assistant", content: null, tool_calls: [{ id: "text_fallback", type: "function", function: { name: toolName, arguments: JSON.stringify(args) } }] });
-        const result = await executeToolCall({ id: "text_fallback", type: "function", function: { name: toolName, arguments: JSON.stringify(args) } });
+        const result = await executeToolCall({ id: "text_fallback", type: "function", function: { name: toolName, arguments: JSON.stringify(args) } }, userId);
         messages.push({ role: "tool", content: result, tool_call_id: "text_fallback", name: toolName });
         indexText(userId, `Tool call (text fallback): ${toolName}(${JSON.stringify(args)}) -> ${result}`);
         continue;
@@ -248,7 +321,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
           webSearchDone = true;
           const searchQuery = userMessage.replace(/busca|pesquisa|procura|encontra|acha|abre|mostra|exibe|veja|olha/gi, "").trim();
           logger.info(`Auto web_search triggered for: "${searchQuery}"`);
-          const result = await executeToolCall({ id: "auto_web_search", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: searchQuery || userMessage }) } });
+          const result = await executeToolCall({ id: "auto_web_search", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: searchQuery || userMessage }) } }, userId);
           const truncatedResult = result.length > 2000 ? result.slice(0, 2000) + "\n... (resultado truncado)" : result;
           messages.push({ role: "system", content: `Busca automática na web acionada. O usuário perguntou sobre "${userMessage}". Resultado da busca:\n${truncatedResult}` });
           indexText(userId, `Auto web_search: "${searchQuery}" -> ${result}`);
@@ -274,8 +347,14 @@ export async function processUserMessage(userId: string, userMessage: string, ch
         name: null,
         tokens: 0,
       });
+      const sanitized = sanitizeResponse(finalContent);
+      logger.info(`[RAW LLM] First 300 chars: "${finalContent.slice(0, 300)}"`);
+      logger.info(`[SANITIZED] First 300 chars: "${sanitized.slice(0, 300)}"`);
+      if (sanitized !== finalContent) {
+        logger.debug(`[sanitizeResponse] Reformatted response for user ${userId}`);
+      }
       indexText(userId, `User: ${userMessage}\nAssistant: ${finalContent}`);
-      return finalContent;
+      return sanitized;
     } else {
       emptyResponseCount++;
       if (emptyResponseCount >= MAX_EMPTY_RETRIES) {

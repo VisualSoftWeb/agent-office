@@ -82,6 +82,10 @@ function serializeOpenAIMessages(messages: Message[]) {
     prompt += `${msg.role}: ${contentStr}\n\n`;
   }
 
+  if (messages.length > 0 && messages[messages.length - 1].role !== 'assistant') {
+    prompt += 'Assistant: ';
+  }
+
   return { prompt, systemPrompt };
 }
 
@@ -120,6 +124,20 @@ function decodeXmlEntities(value: string): string {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&');
+}
+
+function stripDeepSeekMarkers(text: string): string {
+  const before = text;
+  const result = text
+    .replace(/<file\s*url\s*=\s*["'][^"']*["'][^>]*\/?>/gi, '')
+    .replace(/<file\s*[^>]*>[\s\S]*?<\/file\s*>/gi, '')
+    .replace(/\bDEEP_SEARCH\w*/g, '')
+    .replace(/\bNO_RESULT\b/g, '')
+    .replace(/\bINCOMPLETE\b/g, '');
+  if (result !== before) {
+    console.log('[stripDeepSeekMarkers] FILTERED:', JSON.stringify(before), '->', JSON.stringify(result));
+  }
+  return result;
 }
 
 function coerceParameterValue(rawValue: string): unknown {
@@ -261,8 +279,10 @@ async function parseDeepSeekStreamToOpenAI(
 
   const emitContent = async (text: string) => {
     if (!text || emittedToolCallCount > 0) return;
-    content += text;
-    if (emit) await emit(makeChunk(completionId, model, { content: text }));
+    const cleaned = stripDeepSeekMarkers(text);
+    if (!cleaned) return;
+    content += cleaned;
+    if (emit) await emit(makeChunk(completionId, model, { content: cleaned }));
   };
 
   const parseRecoverableToolCallBlock = (block: string, openTag: string): any => {
@@ -397,8 +417,8 @@ async function parseDeepSeekStreamToOpenAI(
         if (!foundStr || vStr === '' || vStr === 'FINISHED') continue;
 
         if (isThinkingChunk) {
-          reasoningContent += vStr;
-          const delta: ChoiceDelta = { reasoning_content: vStr };
+          reasoningContent += stripDeepSeekMarkers(vStr);
+          const delta: ChoiceDelta = { reasoning_content: stripDeepSeekMarkers(vStr) };
           if (emit) await emit(makeChunk(completionId, model, delta));
           continue;
         }
@@ -482,8 +502,8 @@ async function parseDeepSeekStreamToOpenAI(
   };
 
   return {
-    content,
-    reasoningContent,
+    content: stripDeepSeekMarkers(content),
+    reasoningContent: stripDeepSeekMarkers(reasoningContent),
     toolCalls,
     finishReason: emittedToolCallCount > 0 ? 'tool_calls' : 'stop',
     usage

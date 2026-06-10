@@ -1,13 +1,14 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { config } from "../config.js";
 import { registerTool } from "./registry.js";
 
 const TELEGRAM_API = `https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}`;
-let currentChatId: number | null = null;
+const chatByUserId = new Map<string, number>();
 
-export function setSendFileChatId(chatId: number): void {
-  currentChatId = chatId;
+export function setSendFileChatId(userId: string, chatId: number): void {
+  chatByUserId.set(userId, chatId);
 }
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
@@ -16,6 +17,23 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function resolveFilePath(rawPath: string): string {
+  if (!rawPath) return "";
+  const trimmed = rawPath.trim();
+  if (path.isAbsolute(trimmed)) return trimmed;
+
+  const candidates = [
+    path.join(os.homedir(), trimmed),
+    path.join(os.homedir(), "Desktop", trimmed),
+    path.join(os.homedir(), "Downloads", trimmed),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return trimmed;
 }
 
 registerTool("send_file", {
@@ -31,27 +49,36 @@ registerTool("send_file", {
       required: ["filePath"],
     },
   },
-}, async (args) => {
-  const filePath = String(args.filePath ?? "").trim();
-  if (!filePath || filePath === "undefined") return `<tool-error>File path is required</tool-error>`;
+}, async (args, userId) => {
+  const rawPath = String(args.filePath ?? "").trim();
+  if (!rawPath || rawPath === "undefined") {
+    return `<tool-error>Caminho do arquivo não informado. Use o caminho completo (ex: C:\\Users\\SeuNome\\Desktop\\arquivo.png).</tool-error>`;
+  }
 
-  const chatId = currentChatId;
-  if (!chatId) return `<tool-error>No chat context. Cannot send file.</tool-error>`;
+  const filePath = resolveFilePath(rawPath);
+  const chatId = userId ? (chatByUserId.get(userId) ?? null) : null;
+  if (!chatId) {
+    return `<tool-error>Nenhum chat ativo. Use o comando pelo Telegram primeiro.</tool-error>`;
+  }
+
+  if (!existsSync(filePath)) {
+    return `<tool-error>Arquivo não encontrado: ${filePath}\n\nSugestão: use search_files para localizar o arquivo e depois use send_file com o caminho completo retornado.</tool-error>`;
+  }
 
   try {
     const s = statSync(filePath);
-    if (!s.isFile()) return `<tool-error>Not a file: ${filePath}</tool-error>`;
+    if (!s.isFile()) return `<tool-error>Não é um arquivo: ${filePath}</tool-error>`;
 
     const ext = path.extname(filePath).toLowerCase();
     const fileName = path.basename(filePath);
     const maxSize = 50 * 1024 * 1024;
 
     if (s.size > maxSize) {
-      return `<tool-error>File too large to send (${formatSize(s.size)}). Max allowed: 50 MB.</tool-error>`;
+      return `<tool-error>Arquivo muito grande (${formatSize(s.size)}). Máximo permitido: 50 MB.</tool-error>`;
     }
 
     const buf = readFileSync(filePath);
-    const blob = new Blob([buf], { type: "application/octet-stream" });
+    const blob = new Blob([new Uint8Array(buf)], { type: "application/octet-stream" });
     const form = new FormData();
     form.append("chat_id", String(chatId));
     form.append(IMAGE_EXTS.has(ext) ? "photo" : "document", blob, fileName);
@@ -62,15 +89,20 @@ registerTool("send_file", {
       body: form,
       signal: AbortSignal.timeout(30000),
     });
-    const data: any = await res.json();
 
-    if (!data.ok) {
-      return `<tool-error>Telegram API error: ${data.description}</tool-error>`;
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "sem resposta");
+      return `<tool-error>Telegram rejeitou "${fileName}" (HTTP ${res.status}): ${errText}</tool-error>`;
     }
 
-    return `<tool-result>File sent successfully to chat: ${fileName} (${formatSize(s.size)})</tool-result>`;
+    const data: any = await res.json();
+    if (!data.ok) {
+      return `<tool-error>Telegram retornou erro: ${data.description}</tool-error>`;
+    }
+
+    return `<tool-result>Arquivo enviado: ${fileName} (${formatSize(s.size)})</tool-result>`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return `<tool-error>Failed to send file: ${msg}</tool-error>`;
+    return `<tool-error>Falha ao enviar "${path.basename(filePath)}": ${msg}</tool-error>`;
   }
 });

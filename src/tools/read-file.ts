@@ -27,6 +27,11 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatDate(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 registerTool("read_file", {
   type: "function",
   function: {
@@ -51,11 +56,11 @@ registerTool("read_file", {
     const ext = path.extname(filePath);
 
     if (isImageExtension(ext)) {
-      return `<tool-result name="read_file">\nImage file: ${filePath}\nSize: ${formatSize(s.size)}\nDimensions: ${s.size} bytes\nLast modified: ${s.mtime.toISOString()}\n</tool-result>`;
+      return `<tool-result name="read_file">\nImage file: ${filePath}\nSize: ${formatSize(s.size)}\nDimensions: ${s.size} bytes\nLast modified: ${formatDate(s.mtime)}\n</tool-result>`;
     }
 
     if (isBinaryExtension(ext)) {
-      return `<tool-result name="read_file">\nBinary file: ${filePath}\nSize: ${formatSize(s.size)}\nLast modified: ${s.mtime.toISOString()}\n</tool-result>`;
+      return `<tool-result name="read_file">\nBinary file: ${filePath}\nSize: ${formatSize(s.size)}\nLast modified: ${formatDate(s.mtime)}\n</tool-result>`;
     }
 
     if (s.size > MAX_TEXT_SIZE) {

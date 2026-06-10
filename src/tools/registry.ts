@@ -1,6 +1,6 @@
 import type { ToolDefinition, ToolCall } from "../llm/types.js";
 
-export type ToolHandler = (args: Record<string, unknown>) => Promise<string>;
+export type ToolHandler = (args: Record<string, unknown>, userId?: string) => Promise<string>;
 
 interface RegisteredTool {
   definition: ToolDefinition;
@@ -17,7 +17,7 @@ export function getToolDefinitions(): ToolDefinition[] {
   return Array.from(tools.values()).map((t) => t.definition);
 }
 
-export async function executeToolCall(tc: ToolCall): Promise<string> {
+export async function executeToolCall(tc: ToolCall, userId?: string): Promise<string> {
   const registered = tools.get(tc.function.name);
   if (!registered) {
     return `<tool-error>Tool "${tc.function.name}" not found</tool-error>`;
@@ -25,7 +25,7 @@ export async function executeToolCall(tc: ToolCall): Promise<string> {
 
   try {
     const args = JSON.parse(tc.function.arguments);
-    const result = await registered.handler(args);
+    const result = await registered.handler(args, userId);
     return `<tool-result name="${tc.function.name}">\n${result}\n</tool-result>`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

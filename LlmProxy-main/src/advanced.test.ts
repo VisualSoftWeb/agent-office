@@ -228,7 +228,7 @@ test('openai-requests-are-stateless: each request starts a fresh DeepSeek turn',
     assert.strictEqual(capturedPayloads[1].parent_message_id, null, 'Turn 2 should start a fresh DeepSeek turn');
     assert.strictEqual(
       capturedPayloads[1].prompt,
-      'User: Turn 1\n\nAssistant: Response 1\n\nUser: Turn 2\n\n',
+      'User: Turn 1\n\nAssistant: Response 1\n\nUser: Turn 2\n\nAssistant: ',
       'Should send complete message history'
     );
   } finally {
