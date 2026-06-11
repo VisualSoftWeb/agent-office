@@ -14,13 +14,18 @@ export interface MCPConnection {
 
 const connections = new Map<string, MCPConnection>();
 
-export async function connectMCP(name: string, command: string, args: string[]): Promise<MCPConnection> {
+export interface MCPConnectOptions {
+  env?: Record<string, string>;
+}
+
+export async function connectMCP(name: string, command: string, args: string[], options?: MCPConnectOptions): Promise<MCPConnection> {
   try {
     const { spawn } = await import("node:child_process");
     const { readdir, readFile, writeFile } = await import("node:fs/promises");
 
     const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...options?.env },
     });
 
     const connection: MCPConnection = {
