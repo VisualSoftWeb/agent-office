@@ -6,45 +6,59 @@ import { DeepSeekProvider } from "./deepseek.js";
 import { OllamaProvider } from "./ollama.js";
 import { OpenRouterProvider } from "./openrouter.js";
 import { GroqProvider } from "./groq.js";
-import { MyProverProvider } from "./myprover.js";
+import { QwenProxyProvider } from "./qwenproxy.js";
 import { logger } from "../utils/logger.js";
 
 let provider: LLMProvider | null = null;
+let fallbackProvider: LLMProvider | null = null;
+
+export function createProvider(name: string): LLMProvider {
+  switch (name) {
+    case "claude":
+      return new ClaudeProvider();
+    case "gpt":
+      return new GPTProvider();
+    case "deepseek":
+      return new DeepSeekProvider();
+    case "ollama":
+      return new OllamaProvider();
+    case "openrouter":
+      return new OpenRouterProvider();
+    case "groq":
+      return new GroqProvider();
+    case "qwenproxy":
+      return new QwenProxyProvider();
+    default:
+      throw new Error(`Unknown LLM provider: ${name}`);
+  }
+}
 
 export function getLLMProvider(): LLMProvider {
   if (provider) return provider;
 
-  switch (config.LLM_PROVIDER) {
-    case "claude":
-      provider = new ClaudeProvider();
-      break;
-    case "gpt":
-      provider = new GPTProvider();
-      break;
-    case "deepseek":
-      provider = new DeepSeekProvider();
-      break;
-    case "ollama":
-      provider = new OllamaProvider();
-      break;
-    case "openrouter":
-      provider = new OpenRouterProvider();
-      break;
-    case "groq":
-      provider = new GroqProvider();
-      break;
-    case "myprover":
-      provider = new MyProverProvider();
-      break;
-    default:
-      throw new Error(`Unknown LLM provider: ${config.LLM_PROVIDER}`);
-  }
-
+  provider = createProvider(config.LLM_PROVIDER);
   logger.info(`LLM provider initialized: ${provider.name}`);
   return provider;
+}
+
+export function getFallbackProvider(): LLMProvider | null {
+  if (!config.LLM_FALLBACK_PROVIDER) return null;
+  if (config.LLM_FALLBACK_PROVIDER === config.LLM_PROVIDER) return null;
+  
+  if (fallbackProvider) return fallbackProvider;
+
+  try {
+    fallbackProvider = createProvider(config.LLM_FALLBACK_PROVIDER);
+    logger.info(`LLM fallback provider initialized: ${fallbackProvider.name}`);
+    return fallbackProvider;
+  } catch (err) {
+    logger.warn(`Failed to initialize fallback provider ${config.LLM_FALLBACK_PROVIDER}:`, err);
+    return null;
+  }
 }
 
 export function setLLMProvider(p: LLMProvider): void {
   provider = p;
   logger.info(`LLM provider swapped: ${p.name}`);
 }
+

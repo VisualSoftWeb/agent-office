@@ -1,9 +1,0 @@
-node_modules
-dist
-deepseek_profile
-.env
-.git
-.gitignore
-README.md
-.DS_Store
-*.log

@@ -9,7 +9,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "iniciar": "concurrently \"npm run dev\" \"npm run start --prefix LlmProxy-main\""
+    "iniciar": "pm2 start pm2.config.cjs && pm2 logs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

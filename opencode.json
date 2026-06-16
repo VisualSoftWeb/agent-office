@@ -1,17 +1,19 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "meuprovedor": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "myprover",
+    "qwen": {
+      "api": "openai",
       "options": {
         "baseURL": "http://localhost:3000/v1"
       },
       "models": {
-        "meu-modelo": {
-          "name": "deepseek-thinking"
+        "qwen3.7-plus": {
+          "name": "Qwen 3.7 Plus",
+          "tool_call": true,
+          "reasoning": true
         }
       }
     }
-  }
+  },
+  "model": "qwen/qwen3.7-plus"
 }

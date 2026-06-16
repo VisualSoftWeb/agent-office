@@ -3,7 +3,8 @@ import { z } from "zod";
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  LLM_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq", "myprover"]).default("openrouter"),
+  LLM_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq", "qwenproxy"]).default("qwenproxy"),
+  LLM_FALLBACK_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq", "qwenproxy"]).optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
   DEEPSEEK_API_KEY: z.string().optional(),
@@ -18,7 +19,8 @@ const envSchema = z.object({
   PINECONE_INDEX: z.string().optional(),
   STT_PROVIDER: z.enum(["openai", "local"]).default("openai"),
   TTS_PROVIDER: z.enum(["openai", "local"]).default("openai"),
-  MYPROVER_MODEL: z.string().default("deepseek-thinking"),
+  QWENPROXY_MODEL: z.string().default("qwen3.7-plus"),
+  QWENPROXY_BASE_URL: z.string().default("http://127.0.0.1:3000/v1"),
   DAILY_COST_LIMIT: z.coerce.number().default(2.0),
 });
 

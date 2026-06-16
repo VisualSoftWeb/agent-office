@@ -1,4 +1,4 @@
-import { getLLMProvider } from "../llm/provider.js";
+import { getLLMProvider, getFallbackProvider } from "../llm/provider.js";
 import type { Message, LLMResponse } from "../llm/types.js";
 import { getToolDefinitions, executeToolCall } from "../tools/registry.js";
 import { setSendFileChatId } from "../tools/send-file.js";
@@ -186,8 +186,22 @@ export async function processUserMessage(userId: string, userMessage: string, ch
     try {
       response = await llm.chat(messages, currentTools);
     } catch (err) {
-      logger.error("LLM chat error:", err);
-      return "Desculpe, ocorreu um erro inesperado ao processar sua solicitação. Já registrei para análise.";
+      logger.error(`LLM chat error (${llm.name}):`, err);
+      
+      // Tenta fallback provider
+      const fallback = getFallbackProvider();
+      if (fallback) {
+        logger.info(`[Fallback] Trying fallback provider: ${fallback.name}`);
+        try {
+          response = await fallback.chat(messages, currentTools);
+          logger.info(`[Fallback] ${fallback.name} succeeded!`);
+        } catch (fallbackErr) {
+          logger.error(`[Fallback] ${fallback.name} also failed:`, fallbackErr);
+          return "Desculpe, ocorreu um erro inesperado ao processar sua solicitação. Todos os provedores de IA falharam. Já registrei para análise.";
+        }
+      } else {
+        return "Desculpe, ocorreu um erro inesperado ao processar sua solicitação. Já registrei para análise.";
+      }
     }
 
     addCost({

@@ -57,6 +57,11 @@ export class OpenRouterProvider implements LLMProvider {
         },
       };
     } catch (err: any) {
+      if (err.status === 401) {
+        const msg = err.error?.message || "API key inválida ou expirada";
+        logger.warn(`OpenRouter 401: ${msg}`);
+        throw new Error(`OpenRouter auth failed: ${msg}`);
+      }
       if (err.status === 402) {
         const msg = err.error?.message || "Créditos insuficientes";
         logger.warn(`OpenRouter 402: ${msg}`);

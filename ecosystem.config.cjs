@@ -1,21 +1,27 @@
 module.exports = {
   apps: [
     {
-      name: "llm-proxy",
-      cwd: "D:\\agente-model\\LlmProxy-main",
-      script: "node",
-      args: "node_modules/tsx/dist/cli.mjs src/index.ts",
+      name: "qwenproxy",
+      cwd: "./qwenproxy-main",
+      script: "node_modules/tsx/dist/cli.mjs",
+      args: "src/index.ts",
+      interpreter: "node.exe",
+      restart_delay: 3000,
+      max_restarts: 10,
       env: {
-        NODE_ENV: "production",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
       },
     },
     {
-      name: "agent",
-      cwd: "D:\\agente-model",
-      script: "node",
-      args: "node_modules/tsx/dist/cli.mjs src/index.ts",
+      name: "telegram-bot",
+      cwd: ".",
+      script: "node_modules/tsx/dist/cli.mjs",
+      args: "src/index.ts",
+      interpreter: "node.exe",
+      restart_delay: 5000,
+      max_restarts: 10,
       env: {
-        NODE_ENV: "production",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
       },
     },
   ],
