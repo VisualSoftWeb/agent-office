@@ -3,8 +3,8 @@ import { z } from "zod";
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  LLM_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq", "qwenproxy"]).default("qwenproxy"),
-  LLM_FALLBACK_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq", "qwenproxy"]).optional(),
+  LLM_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq"]).default("openrouter"),
+  LLM_FALLBACK_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq"]).optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
   DEEPSEEK_API_KEY: z.string().optional(),
@@ -19,9 +19,13 @@ const envSchema = z.object({
   PINECONE_INDEX: z.string().optional(),
   STT_PROVIDER: z.enum(["openai", "local"]).default("openai"),
   TTS_PROVIDER: z.enum(["openai", "local"]).default("openai"),
-  QWENPROXY_MODEL: z.string().default("qwen3.7-plus"),
-  QWENPROXY_BASE_URL: z.string().default("http://127.0.0.1:3000/v1"),
+  MCP_FILESYSTEM_PATH: z.string().optional(),
+  MCP_GITHUB_TOKEN: z.string().optional(),
+  MCP_BRAVE_API_KEY: z.string().optional(),
+
   DAILY_COST_LIMIT: z.coerce.number().default(2.0),
+  APPROVALS_ENABLED: z.coerce.boolean().default(true),
+  APPROVAL_TIMEOUT: z.coerce.number().default(120000),
 });
 
 export type Env = z.infer<typeof envSchema>;

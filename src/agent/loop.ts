@@ -1,5 +1,5 @@
 import { getLLMProvider, getFallbackProvider } from "../llm/provider.js";
-import type { Message, LLMResponse } from "../llm/types.js";
+import type { Message, LLMResponse, LLMProvider, StreamChunk } from "../llm/types.js";
 import { getToolDefinitions, executeToolCall } from "../tools/registry.js";
 import { setSendFileChatId } from "../tools/send-file.js";
 import { addMessage, getRecentMessages, getFacts, addCost, getDailyCost } from "../memory/short-term.js";
@@ -71,13 +71,23 @@ If the file is not found by send_file, tell the user the exact error and suggest
 - web_search: current information from the internet.
 - delete_file: delete a file or empty folder. FIRST call WITHOUT confirm=true to preview what will be deleted. Then ASK THE USER "Confirma a exclusão?" and wait for a clear "sim" or "confirmo" response. Only on the SECOND call pass confirm=true to actually delete. NEVER call with confirm=true on the first attempt. For folders with contents, also add recursive=true and warn the user.
 
+=== APPROVAL SYSTEM (CRITICAL) ===
+Destructive tools (delete_file, etc.) require user approval via Telegram buttons.
+When you call delete_file, the system will:
+1. Show a preview of what will be deleted
+2. Send approval buttons to the user
+3. Wait for user to click "Aprovar" or "Rejeitar"
+4. Only execute if approved
+
+You do NOT need to ask "Confirma a exclusão?" - the system handles approval automatically.
+Just call the tool and explain what you're doing to the user.
+
 How to call tools (write exactly like this):
   call search_files(pattern="*.pdf")
   call read_file(path="C:\pasta\arquivo.txt")
   call send_file(path="C:\pasta\imagem.png")
   call web_search(query="resultado jogo Brasil ontem")
   call delete_file(path="C:\pasta\arquivo.txt")
-  call delete_file(path="C:\pasta\arquivo.txt", confirm=true)
 After receiving a tool result, analyze it and respond.
 CRITICAL: Do NOT execute destructive actions (delete, modify, execute) without explicit user confirmation. Always use the two-step confirm pattern for delete_file.
 
@@ -149,7 +159,7 @@ function sanitizeResponse(text: string): string {
   return r.trim();
 }
 
-export async function processUserMessage(userId: string, userMessage: string, chatId?: number): Promise<string> {
+export async function processUserMessage(userId: string, userMessage: string, chatId?: number, onToken?: (text: string) => void, skipApproval?: boolean): Promise<string> {
   const dailyCost = getDailyCost();
   if (dailyCost >= config.DAILY_COST_LIMIT && config.LLM_PROVIDER !== "ollama") {
     return "Daily cost limit reached. Cannot process more requests today.";
@@ -184,16 +194,26 @@ export async function processUserMessage(userId: string, userMessage: string, ch
 
     let response: LLMResponse;
     try {
-      response = await llm.chat(messages, currentTools);
+      const isLastIteration = i >= MAX_ITERATIONS - 1;
+      const canStream = onToken !== undefined && llm.chatStream;
+
+      if (canStream && isLastIteration) {
+        response = await consumeStream(llm, messages, currentTools, onToken!);
+      } else {
+        response = await llm.chat(messages, currentTools);
+      }
     } catch (err) {
       logger.error(`LLM chat error (${llm.name}):`, err);
-      
-      // Tenta fallback provider
+
       const fallback = getFallbackProvider();
       if (fallback) {
         logger.info(`[Fallback] Trying fallback provider: ${fallback.name}`);
         try {
-          response = await fallback.chat(messages, currentTools);
+          if (onToken && fallback.chatStream) {
+            response = await consumeStream(fallback, messages, currentTools, onToken);
+          } else {
+            response = await fallback.chat(messages, currentTools);
+          }
           logger.info(`[Fallback] ${fallback.name} succeeded!`);
         } catch (fallbackErr) {
           logger.error(`[Fallback] ${fallback.name} also failed:`, fallbackErr);
@@ -217,7 +237,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
       messages.push({ role: "assistant", content: null, tool_calls: response.tool_calls });
 
       for (const tc of response.tool_calls) {
-        const result = await executeToolCall(tc, userId);
+        const result = await executeToolCall(tc, userId, chatId, skipApproval);
         indexText(userId, `Tool call: ${tc.function.name}(${tc.function.arguments}) -> ${result}`);
         messages.push({
           role: "tool",
@@ -319,7 +339,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
           }
         }
         messages.push({ role: "assistant", content: null, tool_calls: [{ id: "text_fallback", type: "function", function: { name: toolName, arguments: JSON.stringify(args) } }] });
-        const result = await executeToolCall({ id: "text_fallback", type: "function", function: { name: toolName, arguments: JSON.stringify(args) } }, userId);
+        const result = await executeToolCall({ id: "text_fallback", type: "function", function: { name: toolName, arguments: JSON.stringify(args) } }, userId, chatId, skipApproval);
         messages.push({ role: "tool", content: result, tool_call_id: "text_fallback", name: toolName });
         indexText(userId, `Tool call (text fallback): ${toolName}(${JSON.stringify(args)}) -> ${result}`);
         continue;
@@ -335,7 +355,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
           webSearchDone = true;
           const searchQuery = userMessage.replace(/busca|pesquisa|procura|encontra|acha|abre|mostra|exibe|veja|olha/gi, "").trim();
           logger.info(`Auto web_search triggered for: "${searchQuery}"`);
-          const result = await executeToolCall({ id: "auto_web_search", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: searchQuery || userMessage }) } }, userId);
+          const result = await executeToolCall({ id: "auto_web_search", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: searchQuery || userMessage }) } }, userId, chatId, skipApproval);
           const truncatedResult = result.length > 2000 ? result.slice(0, 2000) + "\n... (resultado truncado)" : result;
           messages.push({ role: "system", content: `Busca automática na web acionada. O usuário perguntou sobre "${userMessage}". Resultado da busca:\n${truncatedResult}` });
           indexText(userId, `Auto web_search: "${searchQuery}" -> ${result}`);
@@ -393,4 +413,32 @@ function calculateCost(provider: string, promptTokens: number, completionTokens:
   const rate = MODEL_RATES[provider];
   if (!rate) return 0;
   return (promptTokens * rate.input) + (completionTokens * rate.output);
+}
+
+async function consumeStream(
+  llm: LLMProvider,
+  messages: Message[],
+  tools: import("../llm/types.js").ToolDefinition[] | undefined,
+  onToken: (text: string) => void,
+): Promise<LLMResponse> {
+  let lastContent: string | null = null;
+  const toolCalls: import("../llm/types.js").ToolCall[] = [];
+  let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+
+  for await (const chunk of llm.chatStream!(messages, tools)) {
+    if (chunk.content !== null && chunk.content !== lastContent) {
+      lastContent = chunk.content;
+      const sanitized = sanitizeResponse(chunk.content);
+      onToken(sanitized);
+    }
+    if (chunk.tool_calls.length > 0) {
+      toolCalls.push(...chunk.tool_calls);
+    }
+    if (chunk.usage) {
+      usage = chunk.usage;
+    }
+    if (chunk.done) break;
+  }
+
+  return { content: lastContent, tool_calls: toolCalls, usage };
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import { registerTool } from "./registry.js";
 
 const MAX_TEXT_SIZE = 100 * 1024;
+const MAX_OUTPUT_CHARS = 4000;
 const BINARY_EXTENSIONS = new Set([
   ".pdf", ".png", ".jpeg", ".jpg", ".gif", ".bmp", ".webp", ".ico",
   ".zip", ".rar", ".7z", ".tar", ".gz", ".exe", ".dll", ".bin",
@@ -48,7 +49,7 @@ registerTool("read_file", {
 }, async (args) => {
   const filePath = String(args.path ?? "").trim();
   if (!filePath || filePath === "undefined" || filePath.includes("\\undefined")) {
-    return `<tool-error>File path is missing or invalid. Please provide a valid absolute path.</tool-error>`;
+    return `File path is missing or invalid. Please provide a valid absolute path.`;
   }
 
   try {
@@ -56,27 +57,27 @@ registerTool("read_file", {
     const ext = path.extname(filePath);
 
     if (isImageExtension(ext)) {
-      return `<tool-result name="read_file">\nImage file: ${filePath}\nSize: ${formatSize(s.size)}\nDimensions: ${s.size} bytes\nLast modified: ${formatDate(s.mtime)}\n</tool-result>`;
+      return `Image file: ${filePath}\nSize: ${formatSize(s.size)}\nDimensions: ${s.size} bytes\nLast modified: ${formatDate(s.mtime)}`;
     }
 
     if (isBinaryExtension(ext)) {
-      return `<tool-result name="read_file">\nBinary file: ${filePath}\nSize: ${formatSize(s.size)}\nLast modified: ${formatDate(s.mtime)}\n</tool-result>`;
+      return `Binary file: ${filePath}\nSize: ${formatSize(s.size)}\nLast modified: ${formatDate(s.mtime)}`;
     }
 
     if (s.size > MAX_TEXT_SIZE) {
-      return `<tool-error>File too large to read as text (${formatSize(s.size)}). Max allowed: 100 KB.</tool-error>`;
+      return `File too large to read as text (${formatSize(s.size)}). Max allowed: 100 KB.`;
     }
 
     const content = await readFile(filePath, "utf-8");
 
-    if (content.length > 5000) {
-      return content.slice(0, 5000) + `\n\n... (truncated, full file is ${content.length} characters)`;
+    if (content.length > MAX_OUTPUT_CHARS) {
+      return content.slice(0, MAX_OUTPUT_CHARS) + `\n\n... (truncated: ${content.length} chars -> ${MAX_OUTPUT_CHARS} chars)`;
     }
 
     return content;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return `<tool-error>Failed to read file: ${msg}</tool-error>`;
+    return `Failed to read file: ${msg}`;
   }
 });
 

@@ -94,7 +94,7 @@ registerTool("search_files", {
   },
 }, async (args) => {
   const pattern = String(args.pattern || "").trim();
-  if (!pattern) return `<tool-error>Search pattern is required. Example: '*.pdf'</tool-error>`;
+  if (!pattern) return `Search pattern is required. Example: '*.pdf'`;
 
   const rawDir = args.directory ? String(args.directory).trim() : os.homedir();
   const baseDir = path.resolve(rawDir);
@@ -109,7 +109,7 @@ registerTool("search_files", {
     clearTimeout(timer);
 
     if (results.length === 0) {
-      return `<tool-warning>No files matching "${pattern}" found in ${baseDir}</tool-warning>`;
+      return `No files matching "${pattern}" found in ${baseDir}`;
     }
 
     results.sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime());
@@ -126,6 +126,6 @@ registerTool("search_files", {
   } catch (err) {
     clearTimeout(timer);
     const msg = err instanceof Error ? err.message : String(err);
-    return `<tool-error>Search failed: ${msg}</tool-error>`;
+    return `Search failed: ${msg}`;
   }
 });

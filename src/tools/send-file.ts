@@ -52,29 +52,29 @@ registerTool("send_file", {
 }, async (args, userId) => {
   const rawPath = String(args.filePath ?? "").trim();
   if (!rawPath || rawPath === "undefined") {
-    return `<tool-error>Caminho do arquivo não informado. Use o caminho completo (ex: C:\\Users\\SeuNome\\Desktop\\arquivo.png).</tool-error>`;
+    return `Caminho do arquivo não informado. Use o caminho completo (ex: C:\\Users\\SeuNome\\Desktop\\arquivo.png).`;
   }
 
   const filePath = resolveFilePath(rawPath);
   const chatId = userId ? (chatByUserId.get(userId) ?? null) : null;
   if (!chatId) {
-    return `<tool-error>Nenhum chat ativo. Use o comando pelo Telegram primeiro.</tool-error>`;
+    return `Nenhum chat ativo. Use o comando pelo Telegram primeiro.`;
   }
 
   if (!existsSync(filePath)) {
-    return `<tool-error>Arquivo não encontrado: ${filePath}\n\nSugestão: use search_files para localizar o arquivo e depois use send_file com o caminho completo retornado.</tool-error>`;
+    return `Arquivo não encontrado: ${filePath}\n\nSugestão: use search_files para localizar o arquivo e depois use send_file com o caminho completo retornado.`;
   }
 
   try {
     const s = statSync(filePath);
-    if (!s.isFile()) return `<tool-error>Não é um arquivo: ${filePath}</tool-error>`;
+    if (!s.isFile()) return `Não é um arquivo: ${filePath}`;
 
     const ext = path.extname(filePath).toLowerCase();
     const fileName = path.basename(filePath);
     const maxSize = 50 * 1024 * 1024;
 
     if (s.size > maxSize) {
-      return `<tool-error>Arquivo muito grande (${formatSize(s.size)}). Máximo permitido: 50 MB.</tool-error>`;
+      return `Arquivo muito grande (${formatSize(s.size)}). Máximo permitido: 50 MB.`;
     }
 
     const buf = readFileSync(filePath);
@@ -92,17 +92,17 @@ registerTool("send_file", {
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "sem resposta");
-      return `<tool-error>Telegram rejeitou "${fileName}" (HTTP ${res.status}): ${errText}</tool-error>`;
+      return `Telegram rejeitou "${fileName}" (HTTP ${res.status}): ${errText}`;
     }
 
     const data: any = await res.json();
     if (!data.ok) {
-      return `<tool-error>Telegram retornou erro: ${data.description}</tool-error>`;
+      return `Telegram retornou erro: ${data.description}`;
     }
 
-    return `<tool-result>Arquivo enviado: ${fileName} (${formatSize(s.size)})</tool-result>`;
+    return `Arquivo enviado: ${fileName} (${formatSize(s.size)})`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return `<tool-error>Falha ao enviar "${path.basename(filePath)}": ${msg}</tool-error>`;
+    return `Falha ao enviar "${path.basename(filePath)}": ${msg}`;
   }
 });

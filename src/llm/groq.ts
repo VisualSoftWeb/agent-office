@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { LLMProvider, Message, ToolDefinition, LLMResponse, ToolCall } from "./types.js";
+import type { LLMProvider, Message, ToolDefinition, LLMResponse, ToolCall, StreamChunk } from "./types.js";
 import { config } from "../config.js";
 
 const GROQ_BASE = "https://api.groq.com/openai/v1";
@@ -17,15 +17,44 @@ export class GroqProvider implements LLMProvider {
     });
   }
 
+  async *chatStream(messages: Message[], tools?: ToolDefinition[]): AsyncGenerator<StreamChunk, void, undefined> {
+    const requestOptions: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
+      model: config.GROQ_MODEL,
+      messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+      max_tokens: 4096,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+
+    let fullContent = "";
+    let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+
+    const stream = await this.client.chat.completions.create(requestOptions);
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta;
+      if (delta?.content) {
+        fullContent += delta.content;
+        yield { content: fullContent, tool_calls: [], done: false };
+      }
+      if (chunk.usage) {
+        usage = {
+          prompt_tokens: chunk.usage.prompt_tokens ?? 0,
+          completion_tokens: chunk.usage.completion_tokens ?? 0,
+          total_tokens: chunk.usage.total_tokens ?? 0,
+        };
+      }
+      if (chunk.choices[0]?.finish_reason) break;
+    }
+
+    yield { content: fullContent || null, tool_calls: [], done: true, usage };
+  }
+
   async chat(messages: Message[], tools?: ToolDefinition[]): Promise<LLMResponse> {
     const requestOptions: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
       model: config.GROQ_MODEL,
       messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       max_tokens: 4096,
     };
-
-    // NOTE: tools deliberately omitted — Groq's llama models don't reliably use tool_calls API.
-    // Text-based fallback + auto-detection in loop.ts handles tool calling instead.
 
     try {
       const response = await this.client.chat.completions.create(requestOptions);

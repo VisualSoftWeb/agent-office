@@ -6,7 +6,7 @@ import { checkUserMessage } from "../safeguards/prompt-defense.js";
 import { checkCostLimit } from "../safeguards/costs.js";
 import { transcribe } from "../voice/speech-to-text.js";
 import { synthesize } from "../voice/text-to-speech.js";
-import { createApprovalRequest, getPendingApproval } from "../safeguards/approvals.js";
+import { getApprovalById, resolveApproval, consumeApproval } from "../safeguards/approvals.js";
 import { Markup } from "telegraf";
 import { writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -14,9 +14,30 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+function parseApprovalResponse(text: string): { approvalId: string; toolName: string } | null {
+  const match = text.match(/<approval-required id="([^"]+)" tool="([^"]+)">/);
+  if (match) {
+    return { approvalId: match[1], toolName: match[2] };
+  }
+  return null;
+}
+
+async function waitForApprovalResolution(approvalId: string, timeoutMs: number = 120000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const request = getApprovalById(approvalId);
+    if (request?.resolved) {
+      return request.approved;
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  return false;
+}
+
 export function registerMessageHandler(bot: Telegraf<BotContext>): void {
   bot.on("text", async (ctx) => {
     const userId = ctx.from?.id.toString() ?? "unknown";
+    const chatId = ctx.chat?.id;
     const text = ctx.message.text;
     logger.debug(`Text handler called: userId=${userId}, text="${text.slice(0, 50)}"`);
 
@@ -34,8 +55,35 @@ export function registerMessageHandler(bot: Telegraf<BotContext>): void {
     await ctx.reply("⏳ Processing...");
 
     try {
-      const result = await processUserMessage(userId, text);
-      await ctx.reply(result, { parse_mode: "Markdown" });
+      const result = await processUserMessage(userId, text, chatId);
+
+      const approvalInfo = parseApprovalResponse(result);
+      if (approvalInfo && chatId) {
+        const approvalMsg = `⚠️ **Aprovação Necessária**\n\n` +
+          `O agente quer executar: **${approvalInfo.toolName}**\n` +
+          `ID: \`${approvalInfo.approvalId}\`\n\n` +
+          `Clique em **Aprovar** ou **Rejeitar**:`;
+
+        await ctx.reply(approvalMsg, {
+          parse_mode: "Markdown",
+          ...Markup.inlineKeyboard([
+            Markup.button.callback("✅ Aprovar", `approve:${approvalInfo.approvalId}`),
+            Markup.button.callback("❌ Rejeitar", `reject:${approvalInfo.approvalId}`),
+          ]),
+        });
+
+        const approved = await waitForApprovalResolution(approvalInfo.approvalId);
+
+        if (approved) {
+          await ctx.reply("✅ Aprovado! Re-processando...");
+          const retryResult = await processUserMessage(userId, text, chatId, undefined, true);
+          await ctx.reply(retryResult, { parse_mode: "Markdown" });
+        } else {
+          await ctx.reply("❌ Ação rejeitada ou expirada.");
+        }
+      } else {
+        await ctx.reply(result, { parse_mode: "Markdown" });
+      }
     } catch (err) {
       logger.error("Agent error:", err);
       await ctx.reply("Desculpe, ocorreu um erro inesperado. Já registrei para análise.");
@@ -44,6 +92,7 @@ export function registerMessageHandler(bot: Telegraf<BotContext>): void {
 
   bot.on("voice", async (ctx) => {
     const userId = ctx.from?.id.toString() ?? "unknown";
+    const chatId = ctx.chat?.id;
 
     try {
       const file = await ctx.telegram.getFileLink(ctx.message.voice.file_id);
@@ -59,14 +108,46 @@ export function registerMessageHandler(bot: Telegraf<BotContext>): void {
       }
 
       await ctx.reply(`🎤 Transcrevi: "${transcribed}"`);
-      const result = await processUserMessage(userId, transcribed);
+      const result = await processUserMessage(userId, transcribed, chatId);
 
-      const audioFile = await synthesize(result);
-      if (audioFile) {
-        await ctx.replyWithAudio({ source: audioFile });
-        await unlink(audioFile).catch(() => {});
+      const approvalInfo = parseApprovalResponse(result);
+      if (approvalInfo && chatId) {
+        const approvalMsg = `⚠️ **Aprovação Necessária**\n\n` +
+          `O agente quer executar: **${approvalInfo.toolName}**\n` +
+          `ID: \`${approvalInfo.approvalId}\`\n\n` +
+          `Clique em **Aprovar** ou **Rejeitar**:`;
+
+        await ctx.reply(approvalMsg, {
+          parse_mode: "Markdown",
+          ...Markup.inlineKeyboard([
+            Markup.button.callback("✅ Aprovar", `approve:${approvalInfo.approvalId}`),
+            Markup.button.callback("❌ Rejeitar", `reject:${approvalInfo.approvalId}`),
+          ]),
+        });
+
+        const approved = await waitForApprovalResolution(approvalInfo.approvalId);
+
+        if (approved) {
+          await ctx.reply("✅ Aprovado! Re-processando...");
+          const retryResult = await processUserMessage(userId, transcribed, chatId, undefined, true);
+          const audioFile = await synthesize(retryResult);
+          if (audioFile) {
+            await ctx.replyWithAudio({ source: audioFile });
+            await unlink(audioFile).catch(() => {});
+          } else {
+            await ctx.reply(retryResult);
+          }
+        } else {
+          await ctx.reply("❌ Ação rejeitada ou expirada.");
+        }
       } else {
-        await ctx.reply(result);
+        const audioFile = await synthesize(result);
+        if (audioFile) {
+          await ctx.replyWithAudio({ source: audioFile });
+          await unlink(audioFile).catch(() => {});
+        } else {
+          await ctx.reply(result);
+        }
       }
     } catch (err) {
       logger.error("Voice processing error:", err);
@@ -77,22 +158,24 @@ export function registerMessageHandler(bot: Telegraf<BotContext>): void {
   bot.action(/approve:(.+)/, async (ctx) => {
     const id = ctx.match[1];
     const userId = ctx.from?.id.toString() ?? "unknown";
-    const request = getPendingApproval(userId);
-    if (request && request.id === id) {
-      request.resolved = true;
-      request.approved = true;
-      await ctx.editMessageText("✅ Action approved.");
+    const request = getApprovalById(id);
+    if (request && request.userId === userId && !request.resolved) {
+      resolveApproval(id, true);
+      await ctx.editMessageText("✅ Ação aprovada pelo usuário.");
+    } else {
+      await ctx.answerCbQuery("Aprovação não encontrada ou já processada.");
     }
   });
 
   bot.action(/reject:(.+)/, async (ctx) => {
     const id = ctx.match[1];
     const userId = ctx.from?.id.toString() ?? "unknown";
-    const request = getPendingApproval(userId);
-    if (request && request.id === id) {
-      request.resolved = true;
-      request.approved = false;
-      await ctx.editMessageText("❌ Action rejected.");
+    const request = getApprovalById(id);
+    if (request && request.userId === userId && !request.resolved) {
+      resolveApproval(id, false);
+      await ctx.editMessageText("❌ Ação rejeitada pelo usuário.");
+    } else {
+      await ctx.answerCbQuery("Aprovação não encontrada ou já processada.");
     }
   });
 }

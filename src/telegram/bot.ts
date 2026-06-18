@@ -10,6 +10,8 @@ let pollingAbort = new AbortController();
 
 const TELEGRAM_API = `https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}`;
 
+const THROTTLE_MS = 500;
+
 export function getBot(): Telegraf<BotContext> {
   if (!bot) {
     bot = new Telegraf<BotContext>(config.TELEGRAM_BOT_TOKEN);
@@ -40,13 +42,10 @@ async function getUpdates(offset: number): Promise<any[]> {
   return data.result;
 }
 
-async function sendReply(chatId: number, text: string): Promise<void> {
-  // Log the full text we are about to send for debugging
+async function sendReply(chatId: number, text: string): Promise<{ ok: boolean; result?: any }> {
   logger.debug(`[sendReply] Full text to send (${text.length} chars): "${text.slice(0, 300)}..."`);
 
   const body: Record<string, any> = { chat_id: chatId, text };
-  // Try Markdown first (LLM generates Markdown), then plain text
-  // Skip HTML — it corrupts Markdown text by misinterpreting * and # markers
   for (const pm of ["Markdown", null]) {
     body.parse_mode = pm ?? undefined;
     if (!pm) delete body.parse_mode;
@@ -58,13 +57,62 @@ async function sendReply(chatId: number, text: string): Promise<void> {
     });
     const data: any = await res.json();
     if (data.ok) {
-      logger.debug(`[sendReply] Sent successfully with parse_mode=${pm || 'none'}`);
-      return;
+      logger.debug(`[sendReply] Sent successfully with parse_mode=${pm || "none"}`);
+      return data;
     }
-    logger.warn(`[sendReply] Failed with parse_mode=${pm || 'none'}: ${data.description}`);
+    logger.warn(`[sendReply] Failed with parse_mode=${pm || "none"}: ${data.description}`);
     if (pm !== null) continue;
     throw new Error(`sendMessage failed: ${data.description}`);
   }
+  return { ok: false };
+}
+
+async function editMessageText(chatId: number, messageId: number, text: string): Promise<boolean> {
+  const body: Record<string, any> = { chat_id: chatId, message_id: messageId, text };
+  for (const pm of ["Markdown", null]) {
+    body.parse_mode = pm ?? undefined;
+    if (!pm) delete body.parse_mode;
+    const res = await fetch(`${TELEGRAM_API}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data: any = await res.json();
+    if (data.ok) return true;
+    logger.debug(`[editMessageText] Failed with parse_mode=${pm || "none"}: ${data.description}`);
+  }
+  return false;
+}
+
+function createStreamingCallback(chatId: number, messageId: number): (text: string) => void {
+  let lastSent = "";
+  let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flush = async (text: string) => {
+    if (throttleTimer) {
+      clearTimeout(throttleTimer);
+      throttleTimer = null;
+    }
+    if (text === lastSent) return;
+    try {
+      await editMessageText(chatId, messageId, text);
+      lastSent = text;
+    } catch (err) {
+      logger.warn(`[stream] editMessageText failed:`, err);
+    }
+  };
+
+  return (text: string) => {
+    if (throttleTimer) return;
+    throttleTimer = setTimeout(() => {
+      const currentText = text;
+      editMessageText(chatId, messageId, currentText)
+        .then(() => { lastSent = currentText; })
+        .catch(() => {});
+      throttleTimer = null;
+    }, THROTTLE_MS);
+  };
 }
 
 export function launchBot(): void {
@@ -102,20 +150,36 @@ async function startPolling(): Promise<void> {
 
         logger.info(`Update: userId=${userId}, chatId=${chatId}, text="${text.slice(0, 80)}"`);
 
-        // Reply "processing" immediately
-        await sendReply(chatId, "⏳ Processando...").catch(() => logger.warn("sendReply processing failed"));
+        const processingMsg = await sendReply(chatId, "⏳ Processando...").catch(() => null);
+        const messageId = processingMsg?.result?.message_id;
 
         try {
-          const result = await processUserMessage(userId, text, chatId);
-          logger.info(`processUserMessage returned (${result?.length} chars): "${result?.slice(0, 200)}..."`);
-          await sendReply(chatId, result).catch((e) => {
-            logger.error("Failed to send response:", e);
-          });
-          logger.info("sendReply completed successfully");
+          let finalResult: string;
+          if (messageId) {
+            const onToken = createStreamingCallback(chatId, messageId);
+            finalResult = await processUserMessage(userId, text, chatId, onToken);
+            const sanitized = finalResult.length > 0 ? finalResult : "";
+            if (sanitized) {
+              await editMessageText(chatId, messageId, sanitized).catch(() =>
+                sendReply(chatId, sanitized).catch(() => {})
+              );
+            }
+          } else {
+            finalResult = await processUserMessage(userId, text, chatId);
+            await sendReply(chatId, finalResult).catch((e) => {
+              logger.error("Failed to send response:", e);
+            });
+          }
+          logger.info(`processUserMessage returned (${finalResult?.length} chars): "${finalResult?.slice(0, 200)}..."`);
           offset = Math.max(offset, update.update_id + 1);
         } catch (handlerErr) {
           logger.error("Handler error:", handlerErr);
-          await sendReply(chatId, "Desculpe, ocorreu um erro inesperado. Já registrei para análise.").catch(() => {});
+          const errorMsg = "Desculpe, ocorreu um erro inesperado. Já registrei para análise.";
+          if (messageId) {
+            await editMessageText(chatId, messageId, errorMsg).catch(() => {});
+          } else {
+            await sendReply(chatId, errorMsg).catch(() => {});
+          }
           offset = Math.max(offset, update.update_id + 1);
         }
       }

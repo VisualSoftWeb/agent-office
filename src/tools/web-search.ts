@@ -154,7 +154,7 @@ registerTool("web_search", {
       const results = extractResults(html);
 
       if (results.length === 0) {
-        return `<tool-warning>No results found for "${query}". Try a different query.</tool-warning>`;
+        return `No results found for "${query}". Try a different query.`;
       }
 
       setCache(query, results);
@@ -169,5 +169,5 @@ registerTool("web_search", {
     }
   }
 
-  return `<tool-error>Search failed after 3 attempts: ${lastError}</tool-error>`;
+  return `Search failed after 3 attempts: ${lastError}`;
 });

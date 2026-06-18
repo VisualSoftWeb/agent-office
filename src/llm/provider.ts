@@ -6,7 +6,6 @@ import { DeepSeekProvider } from "./deepseek.js";
 import { OllamaProvider } from "./ollama.js";
 import { OpenRouterProvider } from "./openrouter.js";
 import { GroqProvider } from "./groq.js";
-import { QwenProxyProvider } from "./qwenproxy.js";
 import { logger } from "../utils/logger.js";
 
 let provider: LLMProvider | null = null;
@@ -26,8 +25,6 @@ export function createProvider(name: string): LLMProvider {
       return new OpenRouterProvider();
     case "groq":
       return new GroqProvider();
-    case "qwenproxy":
-      return new QwenProxyProvider();
     default:
       throw new Error(`Unknown LLM provider: ${name}`);
   }

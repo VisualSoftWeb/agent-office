@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { LLMProvider, Message, ToolDefinition, LLMResponse, ToolCall } from "./types.js";
+import type { LLMProvider, Message, ToolDefinition, LLMResponse, ToolCall, StreamChunk } from "./types.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 
@@ -18,8 +18,91 @@ export class OpenRouterProvider implements LLMProvider {
         "HTTP-Referer": "https://github.com/telegram-ai-agent",
         "X-Title": "Telegram AI Agent",
       },
-      timeout: 30000, // Evita travamentos infinitos se a API do OpenRouter oscilar ou demorar
+      timeout: 30000,
     });
+  }
+
+  async *chatStream(messages: Message[], tools?: ToolDefinition[]): AsyncGenerator<StreamChunk, void, undefined> {
+    const requestOptions: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
+      model: config.OPENROUTER_MODEL,
+      messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+      max_tokens: 512,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+
+    if (tools && tools.length > 0) {
+      requestOptions.tools = tools as OpenAI.Chat.Completions.ChatCompletionTool[];
+    }
+
+    let fullContent = "";
+    const toolCalls: ToolCall[] = [];
+    let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+
+    try {
+      const stream = await this.client.chat.completions.create(requestOptions);
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta;
+
+        if (delta?.content) {
+          fullContent += delta.content;
+          yield { content: fullContent, tool_calls: [], done: false };
+        }
+
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            if (tc.index !== undefined) {
+              while (toolCalls.length <= tc.index) {
+                toolCalls.push({ id: "", type: "function", function: { name: "", arguments: "" } });
+              }
+              const existing = toolCalls[tc.index];
+              if (tc.id) existing.id = tc.id;
+              if (tc.function?.name) existing.function.name += tc.function.name;
+              if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
+            }
+          }
+        }
+
+        if (chunk.usage) {
+          usage = {
+            prompt_tokens: chunk.usage.prompt_tokens ?? 0,
+            completion_tokens: chunk.usage.completion_tokens ?? 0,
+            total_tokens: chunk.usage.total_tokens ?? 0,
+          };
+        }
+
+        if (chunk.choices[0]?.finish_reason) {
+          break;
+        }
+      }
+
+      yield { content: fullContent || null, tool_calls: toolCalls, done: true, usage };
+    } catch (err: any) {
+      if (err.status === 401) {
+        const msg = err.error?.message || "API key inválida ou expirada";
+        throw new Error(`OpenRouter auth failed: ${msg}`);
+      }
+      if (err.status === 402) {
+        yield {
+          content: `⚠️ *Créditos OpenRouter insuficientes.*\n\nAcesse https://openrouter.ai/settings/credits para adicionar créditos.`,
+          tool_calls: [],
+          done: true,
+          usage,
+        };
+        return;
+      }
+      if (err.status === 429) {
+        yield {
+          content: `⚠️ *Limite de requisições atingido.*\n\nO modelo gratuito do OpenRouter atingiu o limite diário.`,
+          tool_calls: [],
+          done: true,
+          usage,
+        };
+        return;
+      }
+      throw err;
+    }
   }
 
   async chat(messages: Message[], tools?: ToolDefinition[]): Promise<LLMResponse> {

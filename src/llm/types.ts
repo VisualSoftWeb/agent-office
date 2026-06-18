@@ -36,7 +36,19 @@ export interface ToolDefinition {
   };
 }
 
+export interface StreamChunk {
+  content: string | null;
+  tool_calls: ToolCall[];
+  done: boolean;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
 export interface LLMProvider {
   readonly name: string;
   chat(messages: Message[], tools?: ToolDefinition[]): Promise<LLMResponse>;
+  chatStream?(messages: Message[], tools?: ToolDefinition[]): AsyncGenerator<StreamChunk, void, undefined>;
 }

@@ -44,7 +44,7 @@ registerTool("delete_file", {
 }, async (args) => {
   const filePath = String(args.path ?? "").trim();
   if (!filePath || filePath === "undefined") {
-    return `<tool-error>File path is missing or invalid.</tool-error>`;
+    return `File path is missing or invalid.`;
   }
 
   const resolvedPath = path.resolve(filePath);
@@ -52,7 +52,7 @@ registerTool("delete_file", {
   const doRecursive = args.recursive === true;
 
   if (isSystemPath(resolvedPath)) {
-    return `<tool-error>Cannot delete files in protected system directory: ${resolvedPath}</tool-error>`;
+    return `Cannot delete files in protected system directory: ${resolvedPath}`;
   }
 
   try {
@@ -79,15 +79,15 @@ registerTool("delete_file", {
     return `Successfully deleted file: ${resolvedPath}`;
   } catch (err: any) {
     if (err.code === "ENOENT") {
-      return `<tool-error>File or directory not found: ${resolvedPath}</tool-error>`;
+      return `File or directory not found: ${resolvedPath}`;
     }
     if (err.code === "EPERM" || err.code === "EACCES") {
-      return `<tool-error>Permission denied. Cannot delete: ${resolvedPath}</tool-error>`;
+      return `Permission denied. Cannot delete: ${resolvedPath}`;
     }
     if (err.code === "ENOTEMPTY") {
-      return `<tool-error>Directory is not empty. Use recursive=true to delete non-empty folders (requires explicit user confirmation).</tool-error>`;
+      return `Directory is not empty. Use recursive=true to delete non-empty folders (requires explicit user confirmation).`;
     }
     const msg = err instanceof Error ? err.message : String(err);
-    return `<tool-error>Failed to delete: ${msg}</tool-error>`;
+    return `Failed to delete: ${msg}`;
   }
 });
