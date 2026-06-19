@@ -2,6 +2,7 @@ import { Telegraf, Context } from "telegraf";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 import { processUserMessage } from "../agent/loop.js";
+import { recordMetric } from "../utils/metrics.js";
 
 export type BotContext = Context;
 
@@ -116,6 +117,10 @@ function createStreamingCallback(chatId: number, messageId: number): (text: stri
 }
 
 export function launchBot(): void {
+  if (bot) {
+    logger.warn("Bot already launched, skipping duplicate launch");
+    return;
+  }
   getBot();
 
   getMe().then((me) => {
@@ -148,6 +153,8 @@ async function startPolling(): Promise<void> {
         const text = update.message.text;
         const chatId = update.message.chat.id;
 
+        const startTime = performance.now();
+
         logger.info(`Update: userId=${userId}, chatId=${chatId}, text="${text.slice(0, 80)}"`);
 
         const processingMsg = await sendReply(chatId, "⏳ Processando...").catch(() => null);
@@ -170,7 +177,10 @@ async function startPolling(): Promise<void> {
               logger.error("Failed to send response:", e);
             });
           }
+          const totalTime = Math.round(performance.now() - startTime);
+          logger.info(`[TIMING] Total response time: ${totalTime}ms (${(totalTime / 1000).toFixed(1)}s) for userId=${userId}`);
           logger.info(`processUserMessage returned (${finalResult?.length} chars): "${finalResult?.slice(0, 200)}..."`);
+          recordMetric({ timestamp: Date.now(), durationMs: totalTime, type: "total", label: "response" });
           offset = Math.max(offset, update.update_id + 1);
         } catch (handlerErr) {
           logger.error("Handler error:", handlerErr);
@@ -195,4 +205,6 @@ async function startPolling(): Promise<void> {
 export function stopBot(): void {
   pollingAbort.abort();
   bot?.stop();
+  bot = null;
+  pollingAbort = new AbortController();
 }

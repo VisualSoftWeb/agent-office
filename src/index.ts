@@ -1,5 +1,3 @@
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
 process.on("unhandledRejection", (reason) => {
   logger.error("Unhandled rejection:", reason instanceof Error ? reason.message : reason);
 });

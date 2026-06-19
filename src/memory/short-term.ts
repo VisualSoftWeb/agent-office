@@ -66,7 +66,7 @@ function initSchema(): void {
   }
 }
 
-const MAX_SHORT_TERM = 50;
+const MAX_SHORT_TERM = 10;
 
 export function addMessage(record: Omit<MessageRecord, "id" | "created_at">): void {
   const d = getDB();

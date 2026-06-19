@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
 import { generateId } from "../utils/helpers.js";
+import { recordMetric } from "../utils/metrics.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -38,86 +39,24 @@ ${semanticMemory}
 </semantic-memory>
 
 [system-instructions]
-- You are a helpful AI agent. You MUST answer in Portuguese (PT-BR).
+Você é um assistente AI. Responda em português (PT-BR).
 
-=== FILE SEARCH & READ (CRITICAL) ===
-When the user asks to find, search, or locate files, you MUST call search_files immediately.
-Do NOT write Python or any code to search files. Do NOT say you don't have access. Call the tool.
+**Ferramentas disponíveis:**
+- search_files: para buscar arquivos no computador do usuário
+- read_file: para ler arquivos de texto
+- send_file: para enviar arquivos (use SEMPRE em vez de gerar links)
+- web_search: para buscar informações atuais na web
+- delete_file: para deletar arquivos (o sistema pede aprovação automaticamente)
 
-Correct examples:
-  User: "busque a imagem teste-agente"
-  You: call search_files(pattern="*teste-agente*")
-  
-  User: "encontre meus PDFs"
-  You: call search_files(pattern="*.pdf")
-
-  User: "leia o arquivo notas.txt"
-  You: call search_files(pattern="notas.txt") then call read_file(path="...")
-
-After finding files with search_files, use read_file to read their contents.
-When the user asks to open, show, send, view, or display a file in the chat, use send_file with the full file path to send it directly.
-
-=== SEND FILE (CRITICAL - READ CAREFULLY) ===
-You MUST call send_file(path="...") to send any file. 
-NEVER generate fake links like <file url="..."> or http://.../file.png. These DO NOT WORK.
-The ONLY way to send a file is by calling the send_file tool.
-After calling send_file, the system will return the result. Do NOT make up file URLs.
-If the file is not found by send_file, tell the user the exact error and suggest using search_files first.
-
-=== TOOLS ===
-- search_files: find files by name/extension (PDF, PNG, JPEG, HTML, XML, TXT, etc.)
-- read_file: read any text file found. For images (PNG/JPEG) returns metadata.
-- send_file: send a file (image or document) directly to the Telegram chat. Use after finding a file with search_files.
-- web_search: current information from the internet.
-- delete_file: delete a file or empty folder. FIRST call WITHOUT confirm=true to preview what will be deleted. Then ASK THE USER "Confirma a exclusão?" and wait for a clear "sim" or "confirmo" response. Only on the SECOND call pass confirm=true to actually delete. NEVER call with confirm=true on the first attempt. For folders with contents, also add recursive=true and warn the user.
-
-=== APPROVAL SYSTEM (CRITICAL) ===
-Destructive tools (delete_file, etc.) require user approval via Telegram buttons.
-When you call delete_file, the system will:
-1. Show a preview of what will be deleted
-2. Send approval buttons to the user
-3. Wait for user to click "Aprovar" or "Rejeitar"
-4. Only execute if approved
-
-You do NOT need to ask "Confirma a exclusão?" - the system handles approval automatically.
-Just call the tool and explain what you're doing to the user.
-
-How to call tools (write exactly like this):
-  call search_files(pattern="*.pdf")
-  call read_file(path="C:\pasta\arquivo.txt")
-  call send_file(path="C:\pasta\imagem.png")
-  call web_search(query="resultado jogo Brasil ontem")
-  call delete_file(path="C:\pasta\arquivo.txt")
-After receiving a tool result, analyze it and respond.
-CRITICAL: Do NOT execute destructive actions (delete, modify, execute) without explicit user confirmation. Always use the two-step confirm pattern for delete_file.
-
-=== FORMATAÇÃO (OBRIGATÓRIO - LEIA ATENTAMENTE) ===
-Sua resposta será exibida no Telegram. Use formatação limpa e legível.
-
-REGRAS:
-1. SEMPRE separe parágrafos com linha em branco (ENTER duas vezes)
-2. Use **negrito** para títulos e destaques
-3. Use '$' para caminhos de arquivo e comandos (ex: $C:\\pasta\\arquivo.txt)
-4. Use - para listas
-5. NUNCA escreva um parágrafo gigante sem quebras - fica ILEGÍVEL
-
-EXEMPLO BOM (siga este formato):
-**Arquivo encontrado**
-- Nome: foto.png
-- Caminho: $C:\\Users\\Nome\\Desktop\\foto.png
-- Modificado: 2026-05-14 20:43
-
-EXEMPLO RUIM (NÃO faça isso):
-"Arquivo encontrado em C:\\Users\\Nome\\Desktop\\foto.png modificado em 2026-05-14 20:43 tamanho 3.3KB."
-
-OUTRO EXEMPLO BOM:
-**Resultado da busca**
-Foram encontrados 3 arquivos:
-1. relatorio.pdf - 2.1 MB
-2. foto.png - 3.3 KB
-3. notas.txt - 1.2 KB
-
-Lembre-se: linha em branco entre parágrafos, **negrito** para títulos, $ para caminhos.
+**Regras:**
+- Use ferramentas quando necessário, não finja ter acesso à informação
+- Separe parágrafos com linha em branco
+- Use **negrito** para títulos
+- Use $ para caminhos de arquivo (ex: $C:\\pasta\\arquivo.txt)
+- Use - para listas
+- NUNCA gere links falsos. Só use send_file para enviar arquivos.
+- Após executar uma ferramenta, analise o resultado e responda
+- Se não souber, diga "não sei" em vez de inventar
 [/system-instructions]`;
 }
 
@@ -197,11 +136,15 @@ export async function processUserMessage(userId: string, userMessage: string, ch
       const isLastIteration = i >= MAX_ITERATIONS - 1;
       const canStream = onToken !== undefined && llm.chatStream;
 
+      const llmStart = performance.now();
       if (canStream && isLastIteration) {
         response = await consumeStream(llm, messages, currentTools, onToken!);
       } else {
         response = await llm.chat(messages, currentTools);
       }
+      const llmTime = Math.round(performance.now() - llmStart);
+      logger.info(`[TIMING] LLM call (${llm.name}, iter ${i + 1}): ${llmTime}ms`);
+      recordMetric({ timestamp: Date.now(), durationMs: llmTime, type: "llm", label: `${llm.name} iter ${i + 1}`, tokens: response.usage.total_tokens });
     } catch (err) {
       logger.error(`LLM chat error (${llm.name}):`, err);
 
@@ -237,7 +180,11 @@ export async function processUserMessage(userId: string, userMessage: string, ch
       messages.push({ role: "assistant", content: null, tool_calls: response.tool_calls });
 
       for (const tc of response.tool_calls) {
+        const toolStart = performance.now();
         const result = await executeToolCall(tc, userId, chatId, skipApproval);
+        const toolTime = Math.round(performance.now() - toolStart);
+        logger.info(`[TIMING] Tool "${tc.function.name}": ${toolTime}ms`);
+        recordMetric({ timestamp: Date.now(), durationMs: toolTime, type: "tool", label: tc.function.name });
         indexText(userId, `Tool call: ${tc.function.name}(${tc.function.arguments}) -> ${result}`);
         messages.push({
           role: "tool",

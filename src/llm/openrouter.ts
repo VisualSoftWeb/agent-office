@@ -118,6 +118,15 @@ export class OpenRouterProvider implements LLMProvider {
 
     try {
       const response = await this.client.chat.completions.create(requestOptions);
+      if (!response.choices || !response.choices[0]) {
+        logger.error(`OpenRouter returned empty choices. model=${config.OPENROUTER_MODEL}`);
+        return {
+          content: "⚠️ *O modelo não retornou uma resposta válida.* Pode ser um problema temporário. Tente novamente.",
+          tool_calls: [],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        };
+      }
+
       const choice = response.choices[0];
 
       if (choice.message.content === null && (!choice.message.tool_calls || choice.message.tool_calls.length === 0)) {

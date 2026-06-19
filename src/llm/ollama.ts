@@ -18,6 +18,8 @@ export class OllamaProvider implements LLMProvider {
       model: config.OLLAMA_MODEL,
       messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       max_tokens: 800,
+      temperature: 0.1,
+      top_p: 0.3,
       stream: true,
       stream_options: { include_usage: true },
     };
@@ -68,6 +70,8 @@ export class OllamaProvider implements LLMProvider {
       model: config.OLLAMA_MODEL,
       messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       max_tokens: 800,
+      temperature: 0.1,
+      top_p: 0.3,
     };
 
     if (tools && tools.length > 0) {
