@@ -3,8 +3,8 @@ import { z } from "zod";
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  LLM_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq"]).default("openrouter"),
-  LLM_FALLBACK_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq"]).optional(),
+  LLM_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq", "deepsproxy"]).default("openrouter"),
+  LLM_FALLBACK_PROVIDER: z.enum(["claude", "gpt", "deepseek", "ollama", "openrouter", "groq", "deepsproxy"]).optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
   DEEPSEEK_API_KEY: z.string().optional(),
@@ -14,6 +14,10 @@ const envSchema = z.object({
   GROQ_MODEL: z.string().default("llama-3.3-70b-versatile"),
   OLLAMA_BASE_URL: z.string().default("http://localhost:11434"),
   OLLAMA_MODEL: z.string().default("qwen2.5:1.5b"),
+
+  DEEPSPROXY_BASE_URL: z.string().default("http://localhost:3000/v1"),
+  DEEPSPROXY_API_KEY: z.string().optional(),
+  DEEPSPROXY_MODEL: z.string().default("deepseek-v4-flash"),
   VECTOR_STORE: z.enum(["pinecone", "local"]).default("local"),
   PINECONE_API_KEY: z.string().optional(),
   PINECONE_INDEX: z.string().optional(),

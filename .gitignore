@@ -6,3 +6,4 @@ bot-err.log
 bot-out.log
 .env
 *.log
+deepseek_profile/

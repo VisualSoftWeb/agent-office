@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 import { processUserMessage } from "../agent/loop.js";
 import { recordMetric } from "../utils/metrics.js";
+import { getOffset, setOffset } from "../memory/short-term.js";
 
 export type BotContext = Context;
 
@@ -132,10 +133,10 @@ export function launchBot(): void {
 }
 
 async function startPolling(): Promise<void> {
-  let offset = 0;
+  let offset = getOffset();
   pollingAbort = new AbortController();
 
-  logger.info("Polling started (manual mode)");
+  logger.info(`Polling started (manual mode) from offset=${offset}`);
 
   while (!pollingAbort.signal.aborted) {
     try {
@@ -146,6 +147,7 @@ async function startPolling(): Promise<void> {
       for (const update of updates) {
         if (!update.message || !update.message.text) {
           offset = Math.max(offset, update.update_id + 1);
+          setOffset(offset);
           continue;
         }
 
@@ -182,6 +184,7 @@ async function startPolling(): Promise<void> {
           logger.info(`processUserMessage returned (${finalResult?.length} chars): "${finalResult?.slice(0, 200)}..."`);
           recordMetric({ timestamp: Date.now(), durationMs: totalTime, type: "total", label: "response" });
           offset = Math.max(offset, update.update_id + 1);
+          setOffset(offset);
         } catch (handlerErr) {
           logger.error("Handler error:", handlerErr);
           const errorMsg = "Desculpe, ocorreu um erro inesperado. Já registrei para análise.";
@@ -191,6 +194,7 @@ async function startPolling(): Promise<void> {
             await sendReply(chatId, errorMsg).catch(() => {});
           }
           offset = Math.max(offset, update.update_id + 1);
+          setOffset(offset);
         }
       }
     } catch (err: any) {

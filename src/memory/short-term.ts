@@ -55,6 +55,10 @@ function initSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_facts_user ON facts(user_id);
     CREATE INDEX IF NOT EXISTS idx_costs_user ON costs(user_id, created_at);
+    CREATE TABLE IF NOT EXISTS kv_store (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   const cols = d.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
@@ -129,4 +133,18 @@ export function getDailyCost(): number {
     WHERE created_at >= date('now')
   `).get() as { total: number };
   return row.total;
+}
+
+export function getOffset(): number {
+  const d = getDB();
+  const row = d.prepare(`SELECT value FROM kv_store WHERE key = 'polling_offset'`).get() as { value: string } | undefined;
+  return row ? parseInt(row.value, 10) || 0 : 0;
+}
+
+export function setOffset(offset: number): void {
+  const d = getDB();
+  d.prepare(`
+    INSERT INTO kv_store (key, value) VALUES ('polling_offset', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(String(offset));
 }

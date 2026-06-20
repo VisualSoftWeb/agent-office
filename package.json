@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node --loader ts-node/esm src/index.ts",
+    "dev": "concurrently -n deepsproxy,agent -c cyan,magenta \"npm run dev:proxy\" \"tsx watch src/index.ts\"",
+    "dev:proxy": "tsx watch deepsproxy/src/index.ts",
+    "start": "concurrently -n deepsproxy,agent \"npm run start:proxy\" \"node --loader ts-node/esm src/index.ts\"",
+    "start:proxy": "tsx deepsproxy/src/index.ts",
+    "login:deepseek": "tsx deepsproxy/src/login.ts",
+    "clean:deepseek": "tsx scripts/clean-deepseek-chats.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
@@ -19,6 +23,7 @@
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "openai": "^4.73.0",
+    "playwright": "^1.61.0",
     "telegraf": "^4.16.3",
     "uuid": "^11.0.3",
     "zod": "^3.24.1"
