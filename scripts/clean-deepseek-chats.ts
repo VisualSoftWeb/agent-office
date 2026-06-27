@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const PROFILE_PATH = path.resolve(ROOT, "deepseek_profile");
 const CHAT_URL = "https://chat.deepseek.com/";
-const MAX_DELETIONS = 5;
+const MAX_DELETIONS = Infinity;
 
 function log(msg: string) {
   process.stdout.write(`[${new Date().toLocaleTimeString("pt-BR")}] ${msg}\n`);
@@ -18,7 +18,7 @@ async function sleep(ms: number) {
 }
 
 async function main() {
-  log("🧹 Limpando últimas " + MAX_DELETIONS + " conversas do DeepSeek...\n");
+  log("🧹 Limpando todas as conversas do DeepSeek...\n");
 
   if (!fs.existsSync(PROFILE_PATH)) {
     log("❌ Perfil do navegador não encontrado em: deepseek_profile/");
@@ -49,52 +49,114 @@ async function main() {
 
   try {
     log("📡 Navegando para " + CHAT_URL);
-    await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await sleep(5000);
+    await page.goto(CHAT_URL, { waitUntil: "load", timeout: 60000 });
+    await sleep(8000);
+
+    // Wait for page to stabilize, handling potential redirects
+    let attempts = 0;
+    while (attempts < 3) {
+      try {
+        await page.waitForLoadState("networkidle", { timeout: 15000 });
+        break;
+      } catch {
+        attempts++;
+        await sleep(2000);
+      }
+    }
 
     // Check for CAPTCHA
-    const captchaBtn = await page.$("#amzn-captcha-verify-button");
-    if (captchaBtn) {
-      log("⚠️  CAPTCHA da AWS detectado! Resolva manualmente no navegador...");
-      log("   Após resolver, o script continuará automaticamente.\n");
-      try {
-        await page.waitForURL((url) => !url.href.includes("captcha"), {
-          timeout: 120000,
-        });
-        log("✅ CAPTCHA resolvido!");
-      } catch {
-        log("❌ Tempo limite excedido para resolver o CAPTCHA.");
-        return;
+    let captchaResolved = false;
+    try {
+      const captchaBtn = await page.$("#amzn-captcha-verify-button", { timeout: 3000 });
+      if (captchaBtn) {
+        log("⚠️  CAPTCHA da AWS detectado! Resolva manualmente no navegador...");
+        log("   Após resolver, o script continuará automaticamente.\n");
+        try {
+          await page.waitForURL((url) => !url.href.includes("captcha"), {
+            timeout: 120000,
+          });
+          log("✅ CAPTCHA resolvido!");
+          captchaResolved = true;
+        } catch {
+          log("❌ Tempo limite excedido para resolver o CAPTCHA.");
+          return;
+        }
+        await sleep(3000);
       }
-      await sleep(3000);
+    } catch {
+      log("⚠️  Erro ao verificar CAPTCHA, continuando...");
     }
 
-    // Verify login
-    const bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 2000) || "");
-    if (/log in|login|sign in|entrar/i.test(bodyText)) {
-      log("❌ Página de login detectada.");
-      log("   Execute: npm run login:deepseek e faça login manualmente.");
-      return;
+    // Verify login — wait for user to login manually if needed
+    let loginOk = false;
+    for (let i = 0; i < 5; i++) {
+      try {
+        const state = await page.evaluate(() => {
+          const hasChatInput = !!document.querySelector('textarea, [role="textbox"], [contenteditable="true"]');
+          const hasUserAvatar = !!document.querySelector('[class*="avatar"], [class*="user-detail"], [class*="profile"]');
+          const hasChatUrl = window.location.pathname.includes("/chat/");
+          const hasLoginForm = !!document.querySelector('input[type="email"], input[type="password"], form[action*="login"]');
+
+          if (hasChatInput || hasUserAvatar || hasChatUrl) return "ok";
+          if (hasLoginForm) return "login_page";
+          return "unknown";
+        });
+
+        if (state === "ok") {
+          loginOk = true;
+          log("✅ Login OK, chat pronto.");
+          break;
+        }
+
+        if (state === "login_page") {
+          log("🔑 Página de login detectada. Faça login manualmente no navegador...");
+          log("   Após logar, o script continuará automaticamente.\n");
+          try {
+            await page.waitForFunction(() => {
+              return !!document.querySelector('textarea, [role="textbox"], [contenteditable="true"]');
+            }, { timeout: 120000 });
+            loginOk = true;
+            log("✅ Login manual detectado!");
+            break;
+          } catch {
+            log("⏱️ Tempo limite excedido para login manual (2 min).");
+            return;
+          }
+        }
+
+        log(`⏳ Aguardando carregamento (tentativa ${i + 1}/5)...`);
+        await sleep(3000);
+      } catch (e: any) {
+        log(`⚠️  Erro na verificação (tentativa ${i + 1}/5): ${e.message}`);
+        await sleep(3000);
+      }
     }
 
-    const chatInput = await page.$('textarea, [role="textbox"], [contenteditable="true"]');
-    if (chatInput) {
-      log("✅ Login OK, chat pronto.");
-    } else {
-      log("⚠️  Chat input não encontrado. Tentando continuar mesmo assim...");
+    if (!loginOk) {
+      log("⚠️  Não foi possível confirmar login. Tentando continuar mesmo assim...");
     }
+
+    // Force navigate to chat home after login
+    await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+    await sleep(3000);
 
     // Wait for the sidebar to fully load
     await sleep(3000);
-    await page.goto(CHAT_URL, { waitUntil: "networkidle" });
+    try {
+      await page.goto(CHAT_URL, { waitUntil: "networkidle", timeout: 30000 });
+    } catch {
+      log("⚠️  Timeout no networkidle, continuando...");
+    }
     await sleep(4000);
 
     let deleted = 0;
     let emptyPasses = 0;
 
-    while (deleted < MAX_DELETIONS && emptyPasses < 3) {
+    while (deleted < MAX_DELETIONS && emptyPasses < 6) {
       // Discover conversation delete buttons using multiple strategies
-      const result = await page.evaluate((maxDel) => {
+      let result: { name: string; strategy: string }[] = [];
+      try {
+        result = await page.evaluate((maxDel) => {
         const found: { name: string; strategy: string }[] = [];
 
         // STRATEGY 1: Find conversation items in sidebar by common selectors
@@ -154,6 +216,15 @@ async function main() {
 
         return found;
       }, MAX_DELETIONS - deleted);
+      } catch {
+        log("⚠️  Erro ao buscar conversas, recarregando...");
+        emptyPasses++;
+        try {
+          await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
+        } catch {}
+        await sleep(4000);
+        continue;
+      }
 
       if (result.length === 0) {
         // Try hover-based approach: hover each item and look for delete buttons
@@ -191,129 +262,156 @@ async function main() {
         if (hoverResult.length === 0) {
           emptyPasses++;
           log("⚠️  Nenhuma conversa encontrada. Tentando refresh...");
-          await page.goto(CHAT_URL, { waitUntil: "domcontentloaded" });
+          try {
+            await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
+          } catch {
+            log("⚠️  Erro ao recarregar, continuando...");
+          }
           await sleep(4000);
           continue;
         }
 
         for (const item of hoverResult.reverse()) {
-          if (deleted >= MAX_DELETIONS) break;
-          log(`📄 Hover em: "${item.text || "item"}"`);
+          try {
+            if (deleted >= MAX_DELETIONS) break;
+            log(`📄 Hover em: "${item.text || "item"}"`);
 
-          // Hover over the item
-          await page.mouse.move(item.x, item.y);
-          await sleep(800);
+            // Hover over the item
+            await page.mouse.move(item.x, item.y);
+            await sleep(800);
 
-          // Try clicking delete button that should now be visible
-          const clicked = await page.evaluate(() => {
-            const btn = document.querySelector(
-              '[class*="delete"]:not([class*="hidden"]):not([style*="display: none"]), [class*="trash"]:not([style*="display: none"]), [aria-label*="delete" i], [aria-label*="excluir" i], [aria-label*="apagar" i], [title*="Delete" i], [title*="Excluir" i], button:has(svg)'
-            );
-            if (btn && btn.getBoundingClientRect().width > 0) {
-              (btn as HTMLElement).click();
-              return true;
-            }
-            // Try finding by SVG icon
-            const trashIcons = document.querySelectorAll("svg");
-            for (const svg of trashIcons) {
-              const html = svg.innerHTML.toLowerCase();
-              if (html.includes("trash") || html.includes("delete") || html.includes("lixo")) {
-                const btn = svg.closest("button") || svg.parentElement;
-                if (btn && btn.getBoundingClientRect().width > 0) {
-                  (btn as HTMLElement).click();
-                  return true;
-                }
-              }
-            }
-            return false;
-          });
-
-          if (clicked) {
-            await sleep(1000);
-            // Check for confirmation dialog
-            const confirmed = await page.evaluate(() => {
-              const dialogBtns = document.querySelectorAll(
-                '[class*="modal"] button, [class*="dialog"] button, [class*="overlay"] button, .ds-modal button'
+            // Try clicking delete button that should now be visible
+            const clicked = await page.evaluate(() => {
+              const btn = document.querySelector(
+                '[class*="delete"]:not([class*="hidden"]):not([style*="display: none"]), [class*="trash"]:not([style*="display: none"]), [aria-label*="delete" i], [aria-label*="excluir" i], [aria-label*="apagar" i], [title*="Delete" i], [title*="Excluir" i], button:has(svg)'
               );
-              for (const btn of dialogBtns) {
-                const text = (btn.textContent || "").toLowerCase().trim();
-                if (
-                  text === "delete" ||
-                  text === "confirm" ||
-                  text === "excluir" ||
-                  text === "confirmar" ||
-                  text === "sim" ||
-                  text === "yes" ||
-                  text === "deletar"
-                ) {
-                  (btn as HTMLElement).click();
-                  return true;
-                }
+              if (btn && btn.getBoundingClientRect().width > 0) {
+                (btn as HTMLElement).click();
+                return true;
               }
-
-              // Try finding any button in a visible dialog
-              const dialogs = document.querySelectorAll(
-                '[class*="modal"], [class*="dialog"], [role="dialog"]'
-              );
-              for (const dialog of dialogs) {
-                if (dialog.getBoundingClientRect().width > 0) {
-                  const buttons = dialog.querySelectorAll("button");
-                  // Click the last button (usually confirm/primary)
-                  if (buttons.length > 0) {
-                    buttons[buttons.length - 1].click();
+              // Try finding by SVG icon
+              const trashIcons = document.querySelectorAll("svg");
+              for (const svg of trashIcons) {
+                const html = svg.innerHTML.toLowerCase();
+                if (html.includes("trash") || html.includes("delete") || html.includes("lixo")) {
+                  const btn = svg.closest("button") || svg.parentElement;
+                  if (btn && btn.getBoundingClientRect().width > 0) {
+                    (btn as HTMLElement).click();
                     return true;
                   }
                 }
               }
               return false;
             });
-            if (confirmed) log("✅ Confirmação aceita!");
 
-            deleted++;
-            log(`✅ [${deleted}/${MAX_DELETIONS}] Conversa deletada!`);
-            await sleep(2000);
-          } else {
-            log("⚠️  Botão de deletar não apareceu no hover.");
+            if (clicked) {
+              await sleep(1000);
+              // Check for confirmation dialog
+              const confirmed = await page.evaluate(() => {
+                const dialogBtns = document.querySelectorAll(
+                  '[class*="modal"] button, [class*="dialog"] button, [class*="overlay"] button, .ds-modal button'
+                );
+                for (const btn of dialogBtns) {
+                  const text = (btn.textContent || "").toLowerCase().trim();
+                  if (
+                    text === "delete" ||
+                    text === "confirm" ||
+                    text === "excluir" ||
+                    text === "confirmar" ||
+                    text === "sim" ||
+                    text === "yes" ||
+                    text === "deletar"
+                  ) {
+                    (btn as HTMLElement).click();
+                    return true;
+                  }
+                }
+
+                // Try finding any button in a visible dialog
+                const dialogs = document.querySelectorAll(
+                  '[class*="modal"], [class*="dialog"], [role="dialog"]'
+                );
+                for (const dialog of dialogs) {
+                  if (dialog.getBoundingClientRect().width > 0) {
+                    const buttons = dialog.querySelectorAll("button");
+                    // Click the last button (usually confirm/primary)
+                    if (buttons.length > 0) {
+                      buttons[buttons.length - 1].click();
+                      return true;
+                    }
+                  }
+                }
+                return false;
+              });
+              if (confirmed) log("✅ Confirmação aceita!");
+
+              deleted++;
+              log(`✅ [${deleted}] Conversa deletada!`);
+              await sleep(2000);
+            } else {
+              log("⚠️  Botão de deletar não apareceu no hover.");
+            }
+          } catch {
+            log("⚠️  Erro ao processar hover, continuando...");
           }
         }
 
-        await page.goto(CHAT_URL, { waitUntil: "domcontentloaded" });
-        await sleep(3000);
+        // Refresh to get updated list
+        try {
+          await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
+        } catch {
+          log("⚠️  Erro ao recarregar após hover, continuando...");
+        }
 
       } else {
         // Delete buttons were found and clicked
         log("🔍 Botões de deletar encontrados diretamente!");
         await sleep(1000);
 
+        let batchDeletions = 0;
         for (const item of result) {
-          // Wait a moment for each deletion
-          await sleep(2000);
+          try {
+            // Wait a moment for each deletion
+            await sleep(2000);
 
-          // Check for confirmation dialog
-          const confirmed = await page.evaluate(() => {
-            const btns = document.querySelectorAll("button");
-            for (const btn of btns) {
-              const text = (btn.textContent || "").toLowerCase().trim();
-              if (
-                (text === "delete" || text === "confirm" || text === "excluir" || text === "confirmar" || text === "sim") &&
-                btn.closest('[class*="modal"], [class*="dialog"], [role="dialog"]')
-              ) {
-                (btn as HTMLElement).click();
-                return true;
+            // Check for confirmation dialog
+            const confirmed = await page.evaluate(() => {
+              const btns = document.querySelectorAll("button");
+              for (const btn of btns) {
+                const text = (btn.textContent || "").toLowerCase().trim();
+                if (
+                  (text === "delete" || text === "confirm" || text === "excluir" || text === "confirmar" || text === "sim") &&
+                  btn.closest('[class*="modal"], [class*="dialog"], [role="dialog"]')
+                ) {
+                  (btn as HTMLElement).click();
+                  return true;
+                }
               }
-            }
-            return false;
-          });
+              return false;
+            });
 
-          if (confirmed) log("✅ Confirmação aceita!");
+            if (confirmed) log("✅ Confirmação aceita!");
 
-          deleted++;
-          log(`✅ [${deleted}/${MAX_DELETIONS}] "${item.name}" deletada!`);
-          await sleep(1500);
+            deleted++;
+            batchDeletions++;
+            log(`✅ [${deleted}] "${item.name}" deletada!`);
+            await sleep(1500);
+          } catch {
+            log("⚠️  Erro ao processar item, continuando...");
+          }
+        }
+
+        if (batchDeletions === 0) {
+          emptyPasses++;
+          log("⚠️  Nenhuma conversa foi deletada neste ciclo.");
         }
 
         // Refresh to get updated list
-        await page.goto(CHAT_URL, { waitUntil: "domcontentloaded" });
+        try {
+          await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
+        } catch {
+          log("⚠️  Erro ao recarregar, tentando continuar...");
+        }
         await sleep(3000);
       }
     }
@@ -326,7 +424,7 @@ async function main() {
       log("  • A interface do DeepSeek mudou");
       log("  • A sessão expirou (execute npm run login:deepseek novamente)");
     } else {
-      log(`\n✨ ${deleted} conversa(s) deletada(s) com sucesso!`);
+  log(`\n✨ ${deleted} conversa(s) deletada(s) com sucesso!`);
     }
   } catch (err: any) {
     log("\n💥 Erro: " + err.message);

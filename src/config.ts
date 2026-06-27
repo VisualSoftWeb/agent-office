@@ -27,6 +27,19 @@ const envSchema = z.object({
   MCP_GITHUB_TOKEN: z.string().optional(),
   MCP_BRAVE_API_KEY: z.string().optional(),
 
+  N8N_BASE_URL: z.string().url().optional(),
+  N8N_WEBHOOK_SECRET: z.string().optional(),
+  N8N_TIMEOUT_MS: z.coerce.number().default(60000),
+  N8N_MAX_RETRIES: z.coerce.number().default(2),
+
+  PLANNER_ENABLED: z.coerce.boolean().default(true),
+  PLANNER_MIN_TOKENS: z.coerce.number().default(100),
+  PLANNER_MAX_TASKS: z.coerce.number().default(6),
+
+  RATE_LIMIT_ENABLED: z.coerce.boolean().default(true),
+  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(20),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
+
   DAILY_COST_LIMIT: z.coerce.number().default(2.0),
   APPROVALS_ENABLED: z.coerce.boolean().default(true),
   APPROVAL_TIMEOUT: z.coerce.number().default(120000),

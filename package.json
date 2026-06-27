@@ -9,6 +9,7 @@
     "start": "concurrently -n deepsproxy,agent \"npm run start:proxy\" \"node --loader ts-node/esm src/index.ts\"",
     "start:proxy": "tsx deepsproxy/src/index.ts",
     "login:deepseek": "tsx deepsproxy/src/login.ts",
+    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && npm run clean:deepseek",
     "clean:deepseek": "tsx scripts/clean-deepseek-chats.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",

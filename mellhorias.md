@@ -127,21 +127,3 @@ src/memory/short-term.ts	Cada task registra seu custo/histórico
 src/utils/logger.ts	Log de planos criados e tasks executadas
 src/telegram/handlers.ts	Resposta final enviada normalmente
 src/safeguards/approvals.ts	Tasks destrutivas passam pelo approval system
-Opções de Design (preciso de sua decisão)
-1. Quando planejar?
-- A) Sempre planejar primeiro — até "que horas são?" gera plano de 1 task
-- B) Heurística — planejar só quando mensagem parece complexa
-- C) Híbrido — planejar sempre, mas otimizar casos simples com plano de 1 task
-2. Nível de detalhe do plano
-- A) Alto nível — só descrições, LLM decide tools durante execução
-- B) Baixo nível — cada task já tem tool + args definidos
-3. Execução paralela
-- A) Sim, Promise.all — executa tools independentes simultaneamente
-- B) Não, sequencial — uma task por vez, mas respeitando ordem do DAG (mais barato)
-Esforço Estimado
-Componente	Arquivos	Linhas	Complexidade
-planner.ts	1 novo	~80	Média
-task-graph.ts	1 novo	~100	Média
-Modificar loop.ts	1 existente	~50 linhas alteradas	Alta (integração)
-Prompt de planejamento	dentro de loop.ts	~20 linhas adicionadas	Baixa
-Total	3 arquivos	~250 linhas	Média

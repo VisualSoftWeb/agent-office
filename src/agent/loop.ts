@@ -1,5 +1,5 @@
 import { getLLMProvider, getFallbackProvider } from "../llm/provider.js";
-import type { Message, LLMResponse, LLMProvider, StreamChunk } from "../llm/types.js";
+import type { Message, LLMResponse, LLMProvider, StreamChunk, ToolCall } from "../llm/types.js";
 import { getToolDefinitions, executeToolCall } from "../tools/registry.js";
 import { setSendFileChatId } from "../tools/send-file.js";
 import { addMessage, getRecentMessages, getFacts, addCost, getDailyCost } from "../memory/short-term.js";
@@ -11,6 +11,8 @@ import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
 import { generateId } from "../utils/helpers.js";
 import { recordMetric } from "../utils/metrics.js";
+import { checkRateLimit, formatRateLimit } from "../safeguards/rate-limit.js";
+import { shouldPlan, createPlan, executePlan, type Plan } from "./planner.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,11 +44,7 @@ ${semanticMemory}
 Você é um assistente AI. Responda em português (PT-BR).
 
 **Ferramentas disponíveis:**
-- search_files: para buscar arquivos no computador do usuário
-- read_file: para ler arquivos de texto
-- send_file: para enviar arquivos (use SEMPRE em vez de gerar links)
-- web_search: para buscar informações atuais na web
-- delete_file: para deletar arquivos (o sistema pede aprovação automaticamente)
+${getToolDefinitions().map((t) => `- ${t.function.name}: ${t.function.description}`).join("\n")}
 
 **Regras:**
 - Use ferramentas quando necessário, não finja ter acesso à informação
@@ -57,13 +55,13 @@ Você é um assistente AI. Responda em português (PT-BR).
 - NUNCA gere links falsos. Só use send_file para enviar arquivos.
 - Após executar uma ferramenta, analise o resultado e responda
 - Se não souber, diga "não sei" em vez de inventar
+- Se uma resposta parecer desatualizada ou você não tiver dados recentes, use web_search para buscar
 [/system-instructions]`;
 }
 
 function sanitizeResponse(text: string): string {
   let r = text;
 
-  // 0. Protect URLs and absolute paths BEFORE any modifications
   const protectedUrls: string[] = [];
   r = r.replace(/(https?:\/\/[^\s]+)/g, (m) => {
     protectedUrls.push(m);
@@ -75,19 +73,11 @@ function sanitizeResponse(text: string): string {
     return `__PATH_${protectedPaths.length - 1}__`;
   });
 
-  // 1. Ensure space after punctuation (. ! ?) when followed by a letter/number
   r = r.replace(/([.!?])(?=[A-Za-zÀ-ÿ0-9])/g, "$1 ");
-
-  // 2. Ensure space after : when followed by a letter (but not in timestamps like 10:30)
   r = r.replace(/:([A-Za-zÀ-ÿ])/g, ": $1");
-
-  // 3. Normalize multiple consecutive spaces into one (preserve newlines)
   r = r.replace(/[ \t]{2,}/g, " ");
-
-  // 4. Normalize excessive newlines (3+ -> 2)
   r = r.replace(/\n{3,}/g, "\n\n");
 
-  // 5. Restore protected items
   protectedPaths.forEach((p, i) => {
     r = r.replace(`__PATH_${i}__`, p);
   });
@@ -98,15 +88,80 @@ function sanitizeResponse(text: string): string {
   return r.trim();
 }
 
-export async function processUserMessage(userId: string, userMessage: string, chatId?: number, onToken?: (text: string) => void, skipApproval?: boolean): Promise<string> {
+export async function processUserMessage(
+  userId: string,
+  userMessage: string,
+  chatId?: number,
+  onToken?: (text: string) => void,
+  skipApproval?: boolean,
+): Promise<string> {
   const dailyCost = getDailyCost();
   if (dailyCost >= config.DAILY_COST_LIMIT && config.LLM_PROVIDER !== "ollama") {
     return "Daily cost limit reached. Cannot process more requests today.";
   }
 
+  if (!checkRateLimit(userId)) {
+    return `Rate limit exceeded (${formatRateLimit(userId)}). Aguarde um momento e tente novamente.`;
+  }
+
   const llm = getLLMProvider();
   if (chatId) setSendFileChatId(userId, chatId);
 
+  if (shouldPlan(userMessage)) {
+    return processWithPlanning(llm, userId, userMessage, chatId, skipApproval);
+  }
+
+  return processReactively(llm, userId, userMessage, chatId, onToken, skipApproval);
+}
+
+async function processWithPlanning(
+  llm: LLMProvider,
+  userId: string,
+  userMessage: string,
+  chatId?: number,
+  skipApproval?: boolean,
+): Promise<string> {
+  logger.info(`[PLANNER] Planning triggered for user ${userId}: "${userMessage.slice(0, 100)}..."`);
+
+  const plan: Plan = await createPlan(llm, userMessage);
+  logger.info(`[PLANNER] Plan created: ${plan.tasks.length} tasks`);
+
+  if (plan.tasks.length <= 1) {
+    logger.info("[PLANNER] Single task plan, falling back to reactive");
+    return processReactively(llm, userId, userMessage, chatId, undefined, skipApproval);
+  }
+
+  const planResult = await executePlan(llm, plan, userId, chatId, skipApproval);
+
+  const soulContent = await readFile(path.resolve(__dirname, "../../soul.md"), "utf-8").catch(() => "");
+  const finalMessages: Message[] = [
+    { role: "system", content: `${soulContent}\n\nVocê é um assistente que executou um plano de tarefas. Abaixo estão os resultados de cada tarefa. Sintetize uma resposta final para o usuário em português, de forma clara e organizada.\n\nPlano original: ${plan.objective}` },
+    { role: "user", content: `Resultados do plano:\n${planResult}\n\nCom base nesses resultados, gere uma resposta completa para o usuário que solicitou: "${userMessage}"` },
+  ];
+
+  const finalLLM = getLLMProvider();
+  try {
+    const response = await finalLLM.chat(finalMessages);
+    if (response.content && response.content.trim().length > 0) {
+      const sanitized = sanitizeResponse(response.content.trim());
+      indexText(userId, `User: ${userMessage}\n[Planned execution]\nAssistant: ${sanitized}`);
+      return sanitized;
+    }
+  } catch (err) {
+    logger.error("[PLANNER] Final synthesis failed:", err);
+  }
+
+  return `Plano executado.\n\n${planResult}`;
+}
+
+async function processReactively(
+  llm: LLMProvider,
+  userId: string,
+  userMessage: string,
+  chatId?: number,
+  onToken?: (text: string) => void,
+  skipApproval?: boolean,
+): Promise<string> {
   const soulContent = await readFile(path.resolve(__dirname, "../../soul.md"), "utf-8").catch(() => "No soul.md found.");
   const facts = getFacts(userId).map((f) => `- ${f.fact} (${f.category})`).join("\n");
   const semanticMemory = await searchSimilar(userId, userMessage, 3).then((r) => r.join("\n")).catch(() => "");
@@ -123,9 +178,7 @@ export async function processUserMessage(userId: string, userMessage: string, ch
   const messages: Message[] = [systemMsg, ...history, { role: "user", content: userMessage }];
 
   const conversationId = generateId();
-
   let emptyResponseCount = 0;
-  let webSearchDone = false;
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     const hasToolResult = messages.some((m) => m.role === "tool");
@@ -205,111 +258,6 @@ export async function processUserMessage(userId: string, userMessage: string, ch
     } else if (response.content !== null && response.content.trim().length > 0) {
       const finalContent = response.content.trim();
 
-      let textToolMatch = finalContent.match(/<(search_files|web_search|read_file|send_file|delete_file)>([\s\S]*?)<\/(search_files|web_search|read_file|send_file|delete_file)>/i);
-
-      if (!textToolMatch) {
-        const pythonMatch = finalContent.match(/```(?:python|bash|shell)?\s*\n?\s*(?:call\s+)?(search_files|web_search|read_file|send_file|delete_file)\(\s*([\s\S]*?)\s*\)\s*\n?```/i);
-        if (pythonMatch) {
-          const toolName = pythonMatch[1].toLowerCase();
-          let rawArgs = pythonMatch[2].trim();
-          try {
-            const parsed = Object.fromEntries(
-              [...rawArgs.matchAll(/(\w+)\s*=\s*"([^"]*)"|(\w+)\s*=\s*'([^']*)'/g)].map(m => [m[1] || m[3], m[2] || m[4]])
-            );
-            textToolMatch = [null, toolName, JSON.stringify(parsed)] as any;
-          } catch {}
-        }
-      }
-
-      if (!textToolMatch) {
-        const inlineMatch = finalContent.match(/(?:call\s+)?(search_files|web_search|read_file|send_file|delete_file)\s*\(\s*((?:[^)]|\\\))*)\s*\)/i);
-        if (inlineMatch && inlineMatch.index !== undefined) {
-          const toolName = inlineMatch[1].toLowerCase();
-          let rawArgs = inlineMatch[2].trim();
-          try {
-            const parsed = Object.fromEntries(
-              [...rawArgs.matchAll(/(\w+)\s*=\s*"([^"]*)"|(\w+)\s*=\s*'([^']*)'/g)].map(m => [m[1] || m[3], m[2] || m[4]])
-            );
-            textToolMatch = [null, toolName, JSON.stringify(parsed)] as any;
-          } catch {}
-        }
-      }
-
-      if (textToolMatch) {
-        const toolName = textToolMatch[1].toLowerCase();
-        let toolArgs: string;
-        try {
-          const parsed = JSON.parse(textToolMatch[2]);
-          toolArgs = textToolMatch[2];
-        } catch {
-          toolArgs = textToolMatch[2].trim();
-        }
-        const args: Record<string, unknown> = { query: toolArgs };
-        if (toolName === "search_files") {
-          try { Object.assign(args, JSON.parse(toolArgs)); } catch {
-            args.query = toolArgs;
-          }
-        }
-        if (toolName === "send_file") {
-          try {
-            const parsed = JSON.parse(toolArgs);
-            if (parsed.filePath) { args.filePath = parsed.filePath; delete args.query; }
-            else if (parsed.path) { args.filePath = parsed.path; delete args.query; }
-            else { args.filePath = toolArgs; delete args.query; }
-          } catch {
-            args.filePath = toolArgs;
-            delete args.query;
-          }
-        }
-        if (toolName === "read_file") {
-          try {
-            const parsed = JSON.parse(toolArgs);
-            if (parsed.path) { args.path = parsed.path; delete args.query; }
-            else { args.path = toolArgs; delete args.query; }
-          } catch {
-            args.path = toolArgs;
-            delete args.query;
-          }
-        }
-        if (toolName === "delete_file") {
-          try {
-            const parsed = JSON.parse(toolArgs);
-            args.path = parsed.path || parsed.filePath || toolArgs;
-            args.confirm = parsed.confirm === true;
-            args.recursive = parsed.recursive === true;
-            delete args.query;
-          } catch {
-            args.path = toolArgs;
-            args.confirm = false;
-            args.recursive = false;
-            delete args.query;
-          }
-        }
-        messages.push({ role: "assistant", content: null, tool_calls: [{ id: "text_fallback", type: "function", function: { name: toolName, arguments: JSON.stringify(args) } }] });
-        const result = await executeToolCall({ id: "text_fallback", type: "function", function: { name: toolName, arguments: JSON.stringify(args) } }, userId, chatId, skipApproval);
-        messages.push({ role: "tool", content: result, tool_call_id: "text_fallback", name: toolName });
-        indexText(userId, `Tool call (text fallback): ${toolName}(${JSON.stringify(args)}) -> ${result}`);
-        continue;
-      }
-
-      // Auto-detect web search need (LLM didn't call any tool)
-      const isProviderError = response.usage.total_tokens === 0 && finalContent.startsWith("⚠️");
-      if (!isProviderError) {
-        const searchTriggers = /\b(jogo|jogos|partida|resultado|not[íi]cia|clima|tempo|previs[ãa]o|campeonato|quem ganhou|[úu]ltimas?|placar|mundial|olimp[ií]adas|copa|brasileir[ãa]o|libertadores|futebol|f1|f[oó]rmula 1|ufc|boxe|vôlei|v[oó]lei|basquete|nba|nfl|t[ée]nis|news|breaking|live|stream|ao vivo|pre[çc]o|valor|cotação|cotação|ação|açao|bolsa|bitcoin|ethereum|moeda|d[óo]lar|euro|inflação|inflacao|eleição|eleicao|governo|presidente|ministro|congresso|senado|política|política|guerra|ataque|terremoto|furacão|furacao|enchente|pandemia|vacina|vacina|trump|lula|putin|zelensky|netanyahu|hamas|r[úu]ssia|ucrânia|ucrania|israel|gaza|china|eua|coreia|japão|japao|india|mudança|mudanca|tecnologia|lançamento|lancamento|bilheteria|oscar|grammy|bbb|reality|explosão|explosao|acidente|incêndio|incendio|desabamento|prisão|prisao|lei|projeto|votação|votacao|supremo|stf|congresso|senado|deputado|prefeito|governador|câmara|camara)/i;
-        const userNeedsWebSearch = searchTriggers.test(userMessage);
-        const llmExpressedUncertainty = /\b(n[ãa]o tenho|n[ãa]o sei|n[ãa]o encontrei|n[ãa]o possuo|n[ãa]o consigo|n[ãa]o tenho acesso|infelizmente|desculpe|não disponho|sem acesso|não foi possível|não tenho dados|não encontrei|não sei informar|não possuo informação|não tenho informação|peço desculpas|não posso|não consigo acessar|não tenho como|não está disponível|não disponível|não foi encontrado|não sei responder|não tenho conhecimento)\b/i;
-        if (!webSearchDone && (userNeedsWebSearch || llmExpressedUncertainty.test(finalContent))) {
-          webSearchDone = true;
-          const searchQuery = userMessage.replace(/busca|pesquisa|procura|encontra|acha|abre|mostra|exibe|veja|olha/gi, "").trim();
-          logger.info(`Auto web_search triggered for: "${searchQuery}"`);
-          const result = await executeToolCall({ id: "auto_web_search", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: searchQuery || userMessage }) } }, userId, chatId, skipApproval);
-          const truncatedResult = result.length > 2000 ? result.slice(0, 2000) + "\n... (resultado truncado)" : result;
-          messages.push({ role: "system", content: `Busca automática na web acionada. O usuário perguntou sobre "${userMessage}". Resultado da busca:\n${truncatedResult}` });
-          indexText(userId, `Auto web_search: "${searchQuery}" -> ${result}`);
-          continue;
-        }
-      }
-
       addMessage({
         user_id: userId,
         role: "assistant",
@@ -331,9 +279,6 @@ export async function processUserMessage(userId: string, userMessage: string, ch
       const sanitized = sanitizeResponse(finalContent);
       logger.info(`[RAW LLM] First 300 chars: "${finalContent.slice(0, 300)}"`);
       logger.info(`[SANITIZED] First 300 chars: "${sanitized.slice(0, 300)}"`);
-      if (sanitized !== finalContent) {
-        logger.debug(`[sanitizeResponse] Reformatted response for user ${userId}`);
-      }
       indexText(userId, `User: ${userMessage}\nAssistant: ${finalContent}`);
       return sanitized;
     } else {
@@ -369,7 +314,7 @@ async function consumeStream(
   onToken: (text: string) => void,
 ): Promise<LLMResponse> {
   let lastContent: string | null = null;
-  const toolCalls: import("../llm/types.js").ToolCall[] = [];
+  const toolCalls: ToolCall[] = [];
   let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
   for await (const chunk of llm.chatStream!(messages, tools)) {
