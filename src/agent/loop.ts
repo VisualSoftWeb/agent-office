@@ -73,6 +73,7 @@ function sanitizeResponse(text: string): string {
     return `__PATH_${protectedPaths.length - 1}__`;
   });
 
+  r = r.replace(/(?:\[\d+(?:[-,]\s*\d+)*\])+/g, "");
   r = r.replace(/([.!?])(?=[A-Za-zÀ-ÿ0-9])/g, "$1 ");
   r = r.replace(/:([A-Za-zÀ-ÿ])/g, ": $1");
   r = r.replace(/[ \t]{2,}/g, " ");
