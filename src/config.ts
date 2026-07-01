@@ -27,10 +27,10 @@ const envSchema = z.object({
   MCP_GITHUB_TOKEN: z.string().optional(),
   MCP_BRAVE_API_KEY: z.string().optional(),
 
-  N8N_BASE_URL: z.string().url().optional(),
-  N8N_WEBHOOK_SECRET: z.string().optional(),
-  N8N_TIMEOUT_MS: z.coerce.number().default(60000),
-  N8N_MAX_RETRIES: z.coerce.number().default(2),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
 
   PLANNER_ENABLED: z.coerce.boolean().default(true),
   PLANNER_MIN_TOKENS: z.coerce.number().default(100),

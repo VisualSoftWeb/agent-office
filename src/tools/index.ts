@@ -3,6 +3,4 @@ import "./read-file.js";
 import "./search-files.js";
 import "./send-file.js";
 import "./delete-file.js";
-import { registerOfficeTools } from "./office/index.js";
-
-registerOfficeTools();
+import "./office/index.js";

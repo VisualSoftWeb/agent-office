@@ -4,6 +4,7 @@ import { getToolDefinitions, executeToolCall } from "../tools/registry.js";
 import { setSendFileChatId } from "../tools/send-file.js";
 import { addMessage, getRecentMessages, getFacts, addCost, getDailyCost } from "../memory/short-term.js";
 import { indexText, searchSimilar } from "../memory/semantic.js";
+import { loadSkills } from "../skills/loader.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +28,24 @@ const MODEL_RATES: Record<string, { input: number; output: number }> = {
 const MAX_ITERATIONS = 10;
 const MAX_EMPTY_RETRIES = 5;
 
-function buildSystemPrompt(soulContent: string, facts: string, semanticMemory: string): string {
+let cachedSkills: string | null = null;
+
+async function getSkillsSection(): Promise<string> {
+  if (cachedSkills !== null) return cachedSkills;
+  const skills = await loadSkills();
+  if (skills.length === 0) {
+    cachedSkills = "";
+    return "";
+  }
+  cachedSkills = skills.map((s) => `### ${s.name}\n${s.description}\n${s.content}`).join("\n\n");
+  return cachedSkills;
+}
+
+export function invalidateSkillsCache(): void {
+  cachedSkills = null;
+}
+
+function buildSystemPrompt(soulContent: string, facts: string, semanticMemory: string, skillsSection: string): string {
   return `<soul>
 ${soulContent}
 </soul>
@@ -40,8 +58,10 @@ ${facts}
 ${semanticMemory}
 </semantic-memory>
 
+${skillsSection ? `<skills>\n${skillsSection}\n</skills>` : ""}
+
 [system-instructions]
-Você é um assistente AI. Responda em português (PT-BR).
+Você é um assistente AI para escritórios. Responda em português (PT-BR).
 
 **Ferramentas disponíveis:**
 ${getToolDefinitions().map((t) => `- ${t.function.name}: ${t.function.description}`).join("\n")}
@@ -167,6 +187,7 @@ async function processReactively(
   const soulContent = await readFile(path.resolve(__dirname, "../../soul.md"), "utf-8").catch(() => "No soul.md found.");
   const facts = getFacts(userId).map((f) => `- ${f.fact} (${f.category})`).join("\n");
   const semanticMemory = await searchSimilar(userId, userMessage, 3).then((r) => r.join("\n")).catch(() => "");
+  const skillsSection = await getSkillsSection();
 
   const recentMessages = getRecentMessages(userId);
   const history: Message[] = recentMessages.reverse().map((m) => ({
@@ -176,7 +197,7 @@ async function processReactively(
     name: m.role === "tool" ? (m.name || "unknown") : undefined,
   })).filter((m) => m.role !== "tool" || m.tool_call_id);
 
-  const systemMsg: Message = { role: "system", content: buildSystemPrompt(soulContent, facts, semanticMemory) };
+  const systemMsg: Message = { role: "system", content: buildSystemPrompt(soulContent, facts, semanticMemory, skillsSection) };
   const messages: Message[] = [systemMsg, ...history, { role: "user", content: userMessage }];
 
   const conversationId = generateId();
