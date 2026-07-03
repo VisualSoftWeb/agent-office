@@ -24,7 +24,20 @@ export async function transcribe(filePath: string): Promise<string> {
     return response.text;
   }
 
-  logger.warn("Local STT not implemented yet");
-  await unlink(filePath).catch(() => {});
-  return "";
+  try {
+    const localClient = new OpenAI({
+      baseURL: config.STT_LOCAL_BASE_URL,
+      apiKey: "sk-local",
+    });
+    const response = await localClient.audio.transcriptions.create({
+      model: "whisper-1",
+      file: new File([fileBuffer], "audio.ogg", { type: "audio/ogg" }),
+    });
+    await unlink(filePath).catch(() => {});
+    return response.text;
+  } catch (err) {
+    logger.warn(`Local STT failed: ${err}`);
+    await unlink(filePath).catch(() => {});
+    return "";
+  }
 }

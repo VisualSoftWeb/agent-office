@@ -155,6 +155,37 @@ export function registerMessageHandler(bot: Telegraf<BotContext>): void {
     }
   });
 
+  bot.on("photo", async (ctx) => {
+    const userId = ctx.from?.id.toString() ?? "unknown";
+    const chatId = ctx.chat?.id;
+    const caption = ctx.message.caption || "";
+
+    try {
+      const photos = ctx.message.photo;
+      const largest = photos[photos.length - 1];
+      const file = await ctx.telegram.getFileLink(largest.file_id);
+      const response = await fetch(file.href);
+      const buffer = Buffer.from(await response.arrayBuffer());
+
+      const ext = path.extname(file.href) || ".jpg";
+      const imagePath = path.resolve(__dirname, `../../data/photo-${userId}${ext}`);
+      await writeFile(imagePath, buffer);
+
+      await ctx.reply(`📸 Imagem recebida (${(buffer.length / 1024).toFixed(1)} KB). Processando OCR...`);
+
+      const prompt = caption
+        ? `Imagem salva em: ${imagePath}\n\nLegenda do usuário: ${caption}\n\nUse ler_imagem para extrair texto desta imagem e me mostre o resultado.`
+        : `Imagem salva em: ${imagePath}\n\nUse ler_imagem para extrair o texto desta imagem e me mostre o resultado.`;
+
+      const result = await processUserMessage(userId, prompt, chatId);
+      await ctx.reply(result);
+      await unlink(imagePath).catch(() => {});
+    } catch (err) {
+      logger.error("Photo processing error:", err);
+      await ctx.reply("Desculpe, ocorreu um erro ao processar sua imagem. Já registrei para análise.");
+    }
+  });
+
   bot.action(/approve:(.+)/, async (ctx) => {
     const id = ctx.match[1];
     const userId = ctx.from?.id.toString() ?? "unknown";

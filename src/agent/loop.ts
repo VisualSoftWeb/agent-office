@@ -14,6 +14,7 @@ import { generateId } from "../utils/helpers.js";
 import { recordMetric } from "../utils/metrics.js";
 import { checkRateLimit, formatRateLimit } from "../safeguards/rate-limit.js";
 import { shouldPlan, createPlan, executePlan, type Plan } from "./planner.js";
+import { getPathShortcutsHelp } from "../utils/paths.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -59,6 +60,8 @@ ${semanticMemory}
 </semantic-memory>
 
 ${skillsSection ? `<skills>\n${skillsSection}\n</skills>` : ""}
+
+${getPathShortcutsHelp()}
 
 [system-instructions]
 Você é um assistente AI para escritórios. Responda em português (PT-BR).
@@ -190,12 +193,35 @@ async function processReactively(
   const skillsSection = await getSkillsSection();
 
   const recentMessages = getRecentMessages(userId);
-  const history: Message[] = recentMessages.reverse().map((m) => ({
-    role: m.role as Message["role"],
-    content: m.content,
-    tool_call_id: m.role === "tool" ? (m.tool_call_id || "fallback_" + m.id) : undefined,
-    name: m.role === "tool" ? (m.name || "unknown") : undefined,
-  })).filter((m) => m.role !== "tool" || m.tool_call_id);
+  const assistantToolCallIds = new Set<string>();
+
+  const rawHistory: Message[] = recentMessages.reverse().map((m) => {
+    const msg: Message = {
+      role: m.role as Message["role"],
+      content: m.content,
+    };
+    if (m.role === "tool") {
+      msg.tool_call_id = m.tool_call_id || "fallback_" + m.id;
+      msg.name = m.name || "unknown";
+    }
+    if (m.role === "assistant" && m.tool_calls) {
+      try {
+        const parsed = JSON.parse(m.tool_calls);
+        msg.tool_calls = Array.isArray(parsed) ? parsed : [parsed];
+        for (const tc of msg.tool_calls) {
+          if (tc.id) assistantToolCallIds.add(tc.id);
+        }
+      } catch {
+        // invalid stored tool_calls, skip
+      }
+    }
+    return msg;
+  });
+
+  const history: Message[] = rawHistory.filter((m) => {
+    if (m.role !== "tool") return true;
+    return m.tool_call_id && assistantToolCallIds.has(m.tool_call_id);
+  });
 
   const systemMsg: Message = { role: "system", content: buildSystemPrompt(soulContent, facts, semanticMemory, skillsSection) };
   const messages: Message[] = [systemMsg, ...history, { role: "user", content: userMessage }];

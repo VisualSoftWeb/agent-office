@@ -2,6 +2,7 @@ import { unlink, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { registerTool } from "./registry.js";
+import { resolvePath } from "../utils/paths.js";
 
 const SYSTEM_PATHS = new Set([
   os.homedir() + "\\AppData",
@@ -34,7 +35,7 @@ registerTool("delete_file", {
     parameters: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Absolute path to the file or empty folder to delete" },
+        path: { type: "string", description: "Absolute path to the file or folder to delete. Accepts shortcuts like ~desktop, ~docs. Ex: ~desktop/temp.txt" },
         confirm: { type: "boolean", description: "Must be true to actually delete. If false or omitted, returns a preview." },
         recursive: { type: "boolean", description: "Delete folder and all contents. Use with extreme caution — requires explicit user confirmation." },
       },
@@ -42,7 +43,7 @@ registerTool("delete_file", {
     },
   },
 }, async (args) => {
-  const filePath = String(args.path ?? "").trim();
+  const filePath = resolvePath(String(args.path ?? "").trim());
   if (!filePath || filePath === "undefined") {
     return `File path is missing or invalid.`;
   }

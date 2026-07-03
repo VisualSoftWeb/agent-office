@@ -8,6 +8,7 @@ export interface PlanTask {
   dependsOn: string[];
   status: TaskStatus;
   result?: string;
+  subAgent?: string;
 }
 
 export interface Plan {

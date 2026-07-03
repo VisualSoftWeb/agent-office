@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { config } from "../config.js";
 import { registerTool } from "./registry.js";
+import { resolvePath } from "../utils/paths.js";
 
 const TELEGRAM_API = `https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}`;
 const chatByUserId = new Map<string, number>();
@@ -44,7 +45,7 @@ registerTool("send_file", {
     parameters: {
       type: "object",
       properties: {
-        filePath: { type: "string", description: "Absolute path to the file on disk to send." },
+        filePath: { type: "string", description: "Path to the file to send. Accepts shortcuts like ~desktop, ~docs, ~downloads. Ex: ~desktop/foto.png" },
       },
       required: ["filePath"],
     },
@@ -52,10 +53,10 @@ registerTool("send_file", {
 }, async (args, userId) => {
   const rawPath = String(args.filePath ?? "").trim();
   if (!rawPath || rawPath === "undefined") {
-    return `Caminho do arquivo não informado. Use o caminho completo (ex: C:\\Users\\SeuNome\\Desktop\\arquivo.png).`;
+    return `Caminho do arquivo não informado. Use caminho completo ou atalho (ex: ~desktop/arquivo.png).`;
   }
 
-  const filePath = resolveFilePath(rawPath);
+  const filePath = resolvePath(rawPath);
   const chatId = userId ? (chatByUserId.get(userId) ?? null) : null;
   if (!chatId) {
     return `Nenhum chat ativo. Use o comando pelo Telegram primeiro.`;

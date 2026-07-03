@@ -153,88 +153,23 @@ async function main() {
     let emptyPasses = 0;
 
     while (deleted < MAX_DELETIONS && emptyPasses < 6) {
-      // Discover conversation delete buttons using multiple strategies
-      let result: { name: string; strategy: string }[] = [];
+      // Collect batch of items to delete
+      let batch: { name: string; strategy: string; element?: Element }[] = [];
+      
       try {
-        result = await page.evaluate((maxDel) => {
-        const found: { name: string; strategy: string }[] = [];
+        batch = await page.evaluate((batchSize) => {
+          const found: { name: string; strategy: string }[] = [];
 
-        // STRATEGY 1: Find conversation items in sidebar by common selectors
-        const sidebarSelectors = [
-          'a[href*="/chat/"]',
-          '[class*="chat-item"]',
-          '[class*="conversation-item"]',
-          '[class*="history-item"]',
-          '[class*="sidebar"] a[href]',
-          'aside a[href]',
-          '[class*="ds-chat-item"]',
-          '[class*="ds-chat-list"] > *',
-          '[class*="sidebar"] [class*="item"]',
-        ];
-
-        let items: Element[] = [];
-        for (const sel of sidebarSelectors) {
-          const els = Array.from(document.querySelectorAll(sel));
-          if (els.length > 1) {
-            items = els;
-            break;
-          }
-        }
-
-        // If we have items, try to find their delete buttons
-        for (let i = items.length - 1; i >= 0 && found.length < maxDel; i--) {
-          const item = items[i];
-
-          // Try to find delete button within or near this item
-          const deleteBtn =
-            item.querySelector(
-              '[class*="delete"], [class*="trash"], [class*="remove"], [class*="close"], [aria-label*="delete" i], [aria-label*="trash" i], [aria-label*="excluir" i], [aria-label*="apagar" i], [title*="Delete" i], [title*="Excluir" i]'
-            ) ||
-            item.parentElement?.querySelector(
-              '[class*="delete"], [class*="trash"], [class*="remove"], [class*="close"]'
-            );
-
-          if (deleteBtn) {
-            found.push({
-              name: item.textContent?.trim().slice(0, 80) || "sem título",
-              strategy: "delete-btn-found",
-            });
-            (deleteBtn as HTMLElement).click();
-          } else {
-            // Try hovering to reveal the delete button
-            const rect = item.getBoundingClientRect();
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
-
-            // We'll mark this as hover-needed, the script will handle it
-            found.push({
-              name: item.textContent?.trim().slice(0, 80) || "sem título",
-              strategy: "hover-needed",
-            });
-          }
-        }
-
-        return found;
-      }, MAX_DELETIONS - deleted);
-      } catch {
-        log("⚠️  Erro ao buscar conversas, recarregando...");
-        emptyPasses++;
-        try {
-          await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
-        } catch {}
-        await sleep(4000);
-        continue;
-      }
-
-      if (result.length === 0) {
-        // Try hover-based approach: hover each item and look for delete buttons
-        log("🔍 Tentando estratégia de hover para revelar botões...");
-        const hoverResult = await page.evaluate((maxDel) => {
           const sidebarSelectors = [
             'a[href*="/chat/"]',
             '[class*="chat-item"]',
             '[class*="conversation-item"]',
+            '[class*="history-item"]',
+            '[class*="sidebar"] a[href]',
+            'aside a[href]',
             '[class*="ds-chat-item"]',
+            '[class*="ds-chat-list"] > *',
+            '[class*="sidebar"] [class*="item"]',
           ];
 
           let items: Element[] = [];
@@ -246,174 +181,161 @@ async function main() {
             }
           }
 
-          // Return the bounding rects of the last N items so we can hover them
-          return items.slice(-maxDel).map((item) => {
-            const rect = item.getBoundingClientRect();
-            return {
-              x: rect.left + rect.width - 10, // right side (where delete btn usually is)
-              y: rect.top + rect.height / 2,
-              width: rect.width,
-              height: rect.height,
-              text: item.textContent?.trim().slice(0, 60) || "",
-            };
-          });
-        }, MAX_DELETIONS - deleted);
-
-        if (hoverResult.length === 0) {
-          emptyPasses++;
-          log("⚠️  Nenhuma conversa encontrada. Tentando refresh...");
-          try {
-            await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
-          } catch {
-            log("⚠️  Erro ao recarregar, continuando...");
-          }
-          await sleep(4000);
-          continue;
-        }
-
-        for (const item of hoverResult.reverse()) {
-          try {
-            if (deleted >= MAX_DELETIONS) break;
-            log(`📄 Hover em: "${item.text || "item"}"`);
-
-            // Hover over the item
-            await page.mouse.move(item.x, item.y);
-            await sleep(800);
-
-            // Try clicking delete button that should now be visible
-            const clicked = await page.evaluate(() => {
-              const btn = document.querySelector(
-                '[class*="delete"]:not([class*="hidden"]):not([style*="display: none"]), [class*="trash"]:not([style*="display: none"]), [aria-label*="delete" i], [aria-label*="excluir" i], [aria-label*="apagar" i], [title*="Delete" i], [title*="Excluir" i], button:has(svg)'
+          // Collect up to batchSize items from the end (newest first)
+          for (let i = items.length - 1; i >= 0 && found.length < batchSize; i--) {
+            const item = items[i];
+            const deleteBtn =
+              item.querySelector(
+                '[class*="delete"], [class*="trash"], [class*="remove"], [class*="close"], [aria-label*="delete" i], [aria-label*="trash" i], [aria-label*="excluir" i], [aria-label*="apagar" i], [title*="Delete" i], [title*="Excluir" i]'
+              ) ||
+              item.parentElement?.querySelector(
+                '[class*="delete"], [class*="trash"], [class*="remove"], [class*="close"]'
               );
-              if (btn && btn.getBoundingClientRect().width > 0) {
-                (btn as HTMLElement).click();
-                return true;
-              }
-              // Try finding by SVG icon
-              const trashIcons = document.querySelectorAll("svg");
-              for (const svg of trashIcons) {
-                const html = svg.innerHTML.toLowerCase();
-                if (html.includes("trash") || html.includes("delete") || html.includes("lixo")) {
-                  const btn = svg.closest("button") || svg.parentElement;
-                  if (btn && btn.getBoundingClientRect().width > 0) {
-                    (btn as HTMLElement).click();
-                    return true;
-                  }
-                }
-              }
-              return false;
+
+            found.push({
+              name: item.textContent?.trim().slice(0, 80) || "sem título",
+              strategy: deleteBtn ? "delete-btn-found" : "hover-needed",
             });
-
-            if (clicked) {
-              await sleep(1000);
-              // Check for confirmation dialog
-              const confirmed = await page.evaluate(() => {
-                const dialogBtns = document.querySelectorAll(
-                  '[class*="modal"] button, [class*="dialog"] button, [class*="overlay"] button, .ds-modal button'
-                );
-                for (const btn of dialogBtns) {
-                  const text = (btn.textContent || "").toLowerCase().trim();
-                  if (
-                    text === "delete" ||
-                    text === "confirm" ||
-                    text === "excluir" ||
-                    text === "confirmar" ||
-                    text === "sim" ||
-                    text === "yes" ||
-                    text === "deletar"
-                  ) {
-                    (btn as HTMLElement).click();
-                    return true;
-                  }
-                }
-
-                // Try finding any button in a visible dialog
-                const dialogs = document.querySelectorAll(
-                  '[class*="modal"], [class*="dialog"], [role="dialog"]'
-                );
-                for (const dialog of dialogs) {
-                  if (dialog.getBoundingClientRect().width > 0) {
-                    const buttons = dialog.querySelectorAll("button");
-                    // Click the last button (usually confirm/primary)
-                    if (buttons.length > 0) {
-                      buttons[buttons.length - 1].click();
-                      return true;
-                    }
-                  }
-                }
-                return false;
-              });
-              if (confirmed) log("✅ Confirmação aceita!");
-
-              deleted++;
-              log(`✅ [${deleted}] Conversa deletada!`);
-              await sleep(2000);
-            } else {
-              log("⚠️  Botão de deletar não apareceu no hover.");
-            }
-          } catch {
-            log("⚠️  Erro ao processar hover, continuando...");
           }
-        }
 
-        // Refresh to get updated list
+          return found;
+        }, BATCH_SIZE);
+      } catch {
+        log("⚠️  Erro ao buscar conversas, recarregando...");
+        emptyPasses++;
         try {
           await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
-        } catch {
-          log("⚠️  Erro ao recarregar após hover, continuando...");
-        }
+        } catch {}
+        await sleep(4000);
+        continue;
+      }
 
-      } else {
-        // Delete buttons were found and clicked
-        log("🔍 Botões de deletar encontrados diretamente!");
-        await sleep(1000);
+      if (batch.length === 0) {
+        emptyPasses++;
+        log("⚠️  Nenhuma conversa encontrada. Tentando refresh...");
+        try {
+          await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
+        } catch {}
+        await sleep(4000);
+        continue;
+      }
 
-        let batchDeletions = 0;
-        for (const item of result) {
-          try {
-            // Wait a moment for each deletion
-            await sleep(2000);
+      log(`📦 Lote de ${batch.length} conversas coletado. Iniciando exclusão em lote...`);
 
-            // Check for confirmation dialog
-            const confirmed = await page.evaluate(() => {
-              const btns = document.querySelectorAll("button");
-              for (const btn of btns) {
-                const text = (btn.textContent || "").toLowerCase().trim();
-                if (
-                  (text === "delete" || text === "confirm" || text === "excluir" || text === "confirmar" || text === "sim") &&
-                  btn.closest('[class*="modal"], [class*="dialog"], [role="dialog"]')
-                ) {
+      // Process batch: click delete on each item
+      let batchDeletions = 0;
+      for (const item of batch) {
+        try {
+          if (deleted >= MAX_DELETIONS) break;
+
+          if (item.strategy === "hover-needed") {
+            // Need to hover first to reveal delete button
+            const hoverTarget = await page.evaluate((itemName) => {
+              const sidebarSelectors = [
+                'a[href*="/chat/"]',
+                '[class*="chat-item"]',
+                '[class*="conversation-item"]',
+                '[class*="ds-chat-item"]',
+              ];
+
+              for (const sel of sidebarSelectors) {
+                const els = Array.from(document.querySelectorAll(sel));
+                for (const el of els) {
+                  if (el.textContent?.trim().includes(itemName.slice(0, 30))) {
+                    const rect = el.getBoundingClientRect();
+                    return { x: rect.left + rect.width - 10, y: rect.top + rect.height / 2 };
+                  }
+                }
+              }
+              return null;
+            }, item.name);
+
+            if (hoverTarget) {
+              await page.mouse.move(hoverTarget.x, hoverTarget.y);
+              await sleep(600);
+            }
+          }
+
+          // Click delete button
+          const clicked = await page.evaluate(() => {
+            const btn = document.querySelector(
+              '[class*="delete"]:not([class*="hidden"]):not([style*="display: none"]), [class*="trash"]:not([style*="display: none"]), [aria-label*="delete" i], [aria-label*="excluir" i], [aria-label*="apagar" i], [title*="Delete" i], [title*="Excluir" i], button:has(svg)'
+            );
+            if (btn && btn.getBoundingClientRect().width > 0) {
+              (btn as HTMLElement).click();
+              return true;
+            }
+            const trashIcons = document.querySelectorAll("svg");
+            for (const svg of trashIcons) {
+              const html = svg.innerHTML.toLowerCase();
+              if (html.includes("trash") || html.includes("delete") || html.includes("lixo")) {
+                const btn = svg.closest("button") || svg.parentElement;
+                if (btn && btn.getBoundingClientRect().width > 0) {
                   (btn as HTMLElement).click();
                   return true;
                 }
               }
+            }
+            return false;
+          });
+
+          if (clicked) {
+            await sleep(800);
+            
+            // Confirm deletion
+            const confirmed = await page.evaluate(() => {
+              const dialogs = document.querySelectorAll(
+                '[class*="modal"], [class*="dialog"], [role="dialog"]'
+              );
+              for (const dialog of dialogs) {
+                if (dialog.getBoundingClientRect().width > 0) {
+                  const buttons = dialog.querySelectorAll("button");
+                  for (const btn of buttons) {
+                    const text = (btn.textContent || "").toLowerCase().trim();
+                    if (
+                      text === "delete" || text === "confirm" || text === "excluir" ||
+                      text === "confirmar" || text === "sim" || text === "yes" || text === "deletar"
+                    ) {
+                      (btn as HTMLElement).click();
+                      return true;
+                    }
+                  }
+                  // Fallback: click last button (usually confirm)
+                  if (buttons.length > 0) {
+                    buttons[buttons.length - 1].click();
+                    return true;
+                  }
+                }
+              }
               return false;
             });
 
-            if (confirmed) log("✅ Confirmação aceita!");
-
+            if (confirmed) log("  ✓ Confirmação aceita");
+            
             deleted++;
             batchDeletions++;
-            log(`✅ [${deleted}] "${item.name}" deletada!`);
-            await sleep(1500);
-          } catch {
-            log("⚠️  Erro ao processar item, continuando...");
+            log(`  ✅ [${deleted}/${batch.length}] "${item.name}" deletada`);
+            await sleep(1200);
+          } else {
+            log(`  ⚠️  Botão não encontrado para "${item.name}"`);
           }
-        }
-
-        if (batchDeletions === 0) {
-          emptyPasses++;
-          log("⚠️  Nenhuma conversa foi deletada neste ciclo.");
-        }
-
-        // Refresh to get updated list
-        try {
-          await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
         } catch {
-          log("⚠️  Erro ao recarregar, tentando continuar...");
+          log(`  ⚠️  Erro ao processar "${item.name}"`);
         }
-        await sleep(3000);
       }
+
+      if (batchDeletions === 0) {
+        emptyPasses++;
+        log("⚠️  Nenhuma conversa foi deletada neste lote.");
+      } else {
+        log(`📦 Lote concluído: ${batchDeletions}/${batch.length} deletadas`);
+      }
+
+      // Refresh to get updated list
+      try {
+        await page.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
+      } catch {}
+      await sleep(3000);
     }
 
     if (deleted === 0) {

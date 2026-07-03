@@ -32,6 +32,21 @@ export async function synthesize(text: string): Promise<string> {
     return filePath;
   }
 
-  logger.warn("Local TTS not implemented yet");
-  return "";
+  try {
+    const localClient = new OpenAI({
+      baseURL: config.TTS_LOCAL_BASE_URL,
+      apiKey: "sk-local",
+    });
+    const response = await localClient.audio.speech.create({
+      model: "tts-1",
+      voice: "alloy",
+      input: text,
+    });
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await writeFile(filePath, buffer);
+    return filePath;
+  } catch (err) {
+    logger.warn(`Local TTS failed: ${err}`);
+    return "";
+  }
 }

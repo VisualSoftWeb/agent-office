@@ -26,7 +26,7 @@ export class OpenRouterProvider implements LLMProvider {
     const requestOptions: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
       model: config.OPENROUTER_MODEL,
       messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-      max_tokens: 512,
+      max_tokens: config.OPENROUTER_MAX_TOKENS,
       stream: true,
       stream_options: { include_usage: true },
     };
@@ -109,7 +109,7 @@ export class OpenRouterProvider implements LLMProvider {
     const requestOptions: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
       model: config.OPENROUTER_MODEL,
       messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-      max_tokens: 512,
+      max_tokens: config.OPENROUTER_MAX_TOKENS,
     };
 
     if (tools && tools.length > 0) {

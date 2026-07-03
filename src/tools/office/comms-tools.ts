@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { config } from "../../config.js";
 import { registerTool } from "../registry.js";
+import { resolvePath } from "../../utils/paths.js";
 
 // ── enviar_email ──
 registerTool("enviar_email", {
@@ -66,7 +67,7 @@ registerTool("enviar_email", {
     if (args.anexos && Array.isArray(args.anexos)) {
       mailOptions.attachments = args.anexos.map((a: { caminho: string; nome?: string }) => ({
         filename: a.nome ?? a.caminho.split(/[/\\]/).pop(),
-        path: a.caminho,
+        path: resolvePath(a.caminho),
       }));
     }
 

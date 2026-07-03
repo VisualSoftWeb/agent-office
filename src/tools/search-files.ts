@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { registerTool } from "./registry.js";
+import { resolvePath } from "../utils/paths.js";
 
 const EXCLUDED_DIRS = new Set([
   "node_modules", ".git", ".svn", ".hg", ".venv", "__pycache__",
@@ -87,7 +88,7 @@ registerTool("search_files", {
       type: "object",
       properties: {
         pattern: { type: "string", description: "The search pattern. Examples: '*.pdf' (all PDFs), '**/*.png' (all images recursively), '*fatura*' (files containing 'fatura'), 'relatorio*' (files starting with 'relatorio')." },
-        directory: { type: "string", description: "Optional base directory. Defaults to the user's home folder. Examples: 'C:\\Users', 'D:\\Documentos', 'C:\\Projetos'." },
+        directory: { type: "string", description: "Optional base directory. Defaults to the user's home folder. Accepts shortcuts like ~desktop, ~docs, ~downloads. Examples: '~desktop', '~docs/contratos', 'C:\\Projetos'." },
       },
       required: ["pattern"],
     },
@@ -96,8 +97,8 @@ registerTool("search_files", {
   const pattern = String(args.pattern || "").trim();
   if (!pattern) return `Search pattern is required. Example: '*.pdf'`;
 
-  const rawDir = args.directory ? String(args.directory).trim() : os.homedir();
-  const baseDir = path.resolve(rawDir);
+  const rawDir = args.directory ? String(args.directory).trim() : "~";
+  const baseDir = resolvePath(rawDir);
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);

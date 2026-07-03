@@ -1,6 +1,7 @@
 import { writeFile, readFile, stat, copyFile, rename, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { registerTool } from "../registry.js";
+import { resolvePath, getPathShortcutsHelp } from "../../utils/paths.js";
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -22,7 +23,7 @@ registerTool("criar_arquivo", {
     parameters: {
       type: "object",
       properties: {
-        caminho: { type: "string", description: "Caminho absoluto do arquivo a criar (ex: C:\\Documentos\\nota.txt)" },
+        caminho: { type: "string", description: "Caminho do arquivo a criar. Aceita atalhos como ~desktop, ~docs, ~downloads. Ex: ~desktop/nota.txt" },
         conteudo: { type: "string", description: "Conteúdo do arquivo" },
         encoding: { type: "string", description: "Encoding (padrão: utf-8)" },
       },
@@ -30,7 +31,7 @@ registerTool("criar_arquivo", {
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const filePath = String(args.caminho ?? "").trim();
+  const filePath = resolvePath(String(args.caminho ?? "").trim());
   const content = String(args.conteudo ?? "");
   const encoding = (String(args.encoding ?? "utf-8") as BufferEncoding);
 
@@ -56,14 +57,14 @@ registerTool("listar_pasta", {
     parameters: {
       type: "object",
       properties: {
-        caminho: { type: "string", description: "Caminho absoluto da pasta" },
+        caminho: { type: "string", description: "Caminho da pasta. Aceita atalhos como ~desktop, ~docs, ~downloads." },
         padrao: { type: "string", description: "Filtro glob (ex: *.pdf, *.xlsx)" },
       },
       required: ["caminho"],
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const dirPath = String(args.caminho ?? "").trim();
+  const dirPath = resolvePath(String(args.caminho ?? "").trim());
   const pattern = String(args.padrao ?? "").trim();
 
   if (!dirPath) return "Caminho da pasta é obrigatório.";
@@ -110,13 +111,13 @@ registerTool("criar_pasta", {
     parameters: {
       type: "object",
       properties: {
-        caminho: { type: "string", description: "Caminho absoluto da pasta a criar" },
+        caminho: { type: "string", description: "Caminho da pasta a criar. Aceita atalhos como ~desktop/minha-pasta, ~docs/contratos." },
       },
       required: ["caminho"],
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const dirPath = String(args.caminho ?? "").trim();
+  const dirPath = resolvePath(String(args.caminho ?? "").trim());
   if (!dirPath) return "Caminho da pasta é obrigatório.";
 
   try {
@@ -136,15 +137,15 @@ registerTool("copiar_arquivo", {
     parameters: {
       type: "object",
       properties: {
-        origem: { type: "string", description: "Caminho absoluto do arquivo de origem" },
-        destino: { type: "string", description: "Caminho absoluto do destino" },
+        origem: { type: "string", description: "Caminho do arquivo de origem. Aceita atalhos como ~desktop, ~docs." },
+        destino: { type: "string", description: "Caminho do destino. Aceita atalhos como ~desktop, ~docs." },
       },
       required: ["origem", "destino"],
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const src = String(args.origem ?? "").trim();
-  const dest = String(args.destino ?? "").trim();
+  const src = resolvePath(String(args.origem ?? "").trim());
+  const dest = resolvePath(String(args.destino ?? "").trim());
   if (!src || !dest) return "Origem e destino são obrigatórios.";
 
   try {
@@ -167,15 +168,15 @@ registerTool("renomear_arquivo", {
     parameters: {
       type: "object",
       properties: {
-        origem: { type: "string", description: "Caminho atual do arquivo/pasta" },
-        destino: { type: "string", description: "Novo caminho ou novo nome" },
+        origem: { type: "string", description: "Caminho atual do arquivo/pasta. Aceita atalhos como ~desktop, ~docs." },
+        destino: { type: "string", description: "Novo caminho ou novo nome. Aceita atalhos como ~desktop, ~docs." },
       },
       required: ["origem", "destino"],
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const src = String(args.origem ?? "").trim();
-  const dest = String(args.destino ?? "").trim();
+  const src = resolvePath(String(args.origem ?? "").trim());
+  const dest = resolvePath(String(args.destino ?? "").trim());
   if (!src || !dest) return "Origem e destino são obrigatórios.";
 
   try {

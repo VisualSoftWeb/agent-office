@@ -10,6 +10,7 @@ const envSchema = z.object({
   DEEPSEEK_API_KEY: z.string().optional(),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_MODEL: z.string().default("openai/gpt-4o"),
+  OPENROUTER_MAX_TOKENS: z.coerce.number().default(4096),
   GROQ_API_KEY: z.string().optional(),
   GROQ_MODEL: z.string().default("llama-3.3-70b-versatile"),
   OLLAMA_BASE_URL: z.string().default("http://localhost:11434"),
@@ -35,6 +36,17 @@ const envSchema = z.object({
   PLANNER_ENABLED: z.coerce.boolean().default(true),
   PLANNER_MIN_TOKENS: z.coerce.number().default(100),
   PLANNER_MAX_TASKS: z.coerce.number().default(6),
+  PLANNER_MAX_REPLAN_ATTEMPTS: z.coerce.number().default(1),
+
+  WEBHOOK_ENABLED: z.coerce.boolean().default(false),
+  WEBHOOK_URL: z.string().optional(),
+  WEBHOOK_PORT: z.coerce.number().default(8443),
+  WEBHOOK_SECRET: z.string().optional(),
+
+  OTEL_ENABLED: z.coerce.boolean().default(false),
+
+  STT_LOCAL_BASE_URL: z.string().default("http://localhost:9000"),
+  TTS_LOCAL_BASE_URL: z.string().default("http://localhost:9001"),
 
   RATE_LIMIT_ENABLED: z.coerce.boolean().default(true),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(20),

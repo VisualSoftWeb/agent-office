@@ -3,6 +3,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { registerTool } from "../registry.js";
+import { resolvePath } from "../../utils/paths.js";
 
 function formatDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -35,7 +36,7 @@ registerTool("criar_documento", {
     parameters: {
       type: "object",
       properties: {
-        caminho: { type: "string", description: "Caminho do arquivo .docx a criar" },
+        caminho: { type: "string", description: "Caminho do arquivo .docx a criar. Aceita atalhos como ~desktop, ~docs." },
         conteudo: { type: "string", description: "Texto do documento ou JSON estruturado" },
         titulo: { type: "string", description: "Título do documento (opcional)" },
       },
@@ -43,7 +44,7 @@ registerTool("criar_documento", {
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const filePath = String(args.caminho ?? "").trim();
+  const filePath = resolvePath(String(args.caminho ?? "").trim());
   const content = String(args.conteudo ?? "");
   const title = String(args.titulo ?? "").trim();
 
@@ -101,26 +102,25 @@ registerTool("criar_documento", {
                 })),
               }));
             }
-            sections.push(new Table({ rows: tableRows, width: { size: 100, type: WidthType.PERCENTAGE } }));
-            sections.push(new Paragraph({ text: "" }));
+            sections.push(new Table({
+              rows: tableRows,
+              width: { size: 100, type: WidthType.PERCENTAGE },
+            }));
           }
           break;
         default:
           sections.push(new Paragraph({
-            children: [new TextRun({ text: el.conteudo ?? "", bold: el.negrito })],
+            spacing: { before: 200, after: 200 },
+            children: [new TextRun({ text: el.conteudo ?? "" })],
           }));
       }
     }
 
-    const doc = new Document({
-      sections: [{ properties: {}, children: sections }],
-    });
-
+    const doc = new Document({ sections: [{ children: sections }] });
     const buffer = await Packer.toBuffer(doc);
     const dir = path.dirname(filePath);
     await mkdir(dir, { recursive: true });
     await writeFile(filePath, buffer);
-
     return `Documento Word criado: ${filePath}\nTamanho: ${(buffer.length / 1024).toFixed(1)} KB\nData: ${formatDate(new Date())}`;
   } catch (err) {
     return `Erro ao criar documento: ${err instanceof Error ? err.message : String(err)}`;
@@ -136,7 +136,7 @@ registerTool("criar_pdf", {
     parameters: {
       type: "object",
       properties: {
-        caminho: { type: "string", description: "Caminho do arquivo .pdf a criar" },
+        caminho: { type: "string", description: "Caminho do arquivo .pdf a criar. Aceita atalhos como ~desktop, ~docs." },
         conteudo: { type: "string", description: "Texto do PDF ou JSON estruturado" },
         titulo: { type: "string", description: "Título do documento (opcional)" },
       },
@@ -144,7 +144,7 @@ registerTool("criar_pdf", {
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const filePath = String(args.caminho ?? "").trim();
+  const filePath = resolvePath(String(args.caminho ?? "").trim());
   const content = String(args.conteudo ?? "");
   const title = String(args.titulo ?? "").trim();
 
@@ -266,13 +266,13 @@ registerTool("ler_pdf", {
     parameters: {
       type: "object",
       properties: {
-        caminho: { type: "string", description: "Caminho do arquivo PDF" },
+        caminho: { type: "string", description: "Caminho do arquivo PDF. Aceita atalhos como ~desktop, ~docs." },
       },
       required: ["caminho"],
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const filePath = String(args.caminho ?? "").trim();
+  const filePath = resolvePath(String(args.caminho ?? "").trim());
   if (!filePath) return "Caminho é obrigatório.";
 
   try {

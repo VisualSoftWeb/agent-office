@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { registerTool } from "./registry.js";
+import { resolvePath } from "../utils/paths.js";
 
 const MAX_TEXT_SIZE = 100 * 1024;
 const MAX_OUTPUT_CHARS = 4000;
@@ -37,17 +38,17 @@ registerTool("read_file", {
   type: "function",
   function: {
     name: "read_file",
-    description: "Read any text file from the user's computer. Authorized file access. Handles HTML, XML, TXT, JS, TS, JSON, MD, CSS, LOG, etc. For binary files (PDF, PNG, JPEG) returns metadata. Max size: 100 KB.",
+    description: "Read any text file from the user's computer. For images (PNG, JPG, etc) use ler_imagem instead. For PDFs use ler_pdf. Authorized file access. Handles HTML, XML, TXT, JS, TS, JSON, MD, CSS, LOG, etc. Max size: 100 KB.",
     parameters: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Absolute path to the file on disk" },
+        path: { type: "string", description: "Absolute path to the file on disk. Accepts shortcuts like ~desktop, ~docs, ~downloads. Ex: ~desktop/relatorio.pdf" },
       },
       required: ["path"],
     },
   },
 }, async (args) => {
-  const filePath = String(args.path ?? "").trim();
+  const filePath = resolvePath(String(args.path ?? "").trim());
   if (!filePath || filePath === "undefined" || filePath.includes("\\undefined")) {
     return `File path is missing or invalid. Please provide a valid absolute path.`;
   }
@@ -57,7 +58,7 @@ registerTool("read_file", {
     const ext = path.extname(filePath);
 
     if (isImageExtension(ext)) {
-      return `Image file: ${filePath}\nSize: ${formatSize(s.size)}\nDimensions: ${s.size} bytes\nLast modified: ${formatDate(s.mtime)}`;
+      return `Imagem: ${filePath}\nTamanho: ${formatSize(s.size)}\nData: ${formatDate(s.mtime)}\n\nUse a ferramenta ler_imagem para extrair texto desta imagem.`;
     }
 
     if (isBinaryExtension(ext)) {

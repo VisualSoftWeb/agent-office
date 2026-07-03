@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { registerTool } from "../registry.js";
+import { resolvePath } from "../../utils/paths.js";
 
 function formatDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -17,7 +18,7 @@ registerTool("criar_planilha", {
     parameters: {
       type: "object",
       properties: {
-        caminho: { type: "string", description: "Caminho do arquivo .xlsx a criar" },
+        caminho: { type: "string", description: "Caminho do arquivo .xlsx a criar. Aceita atalhos como ~desktop, ~docs." },
         aba: { type: "string", description: "Nome da aba (padrão: Planilha1)" },
         cabecalhos: { type: "array", items: { type: "string" }, description: "Lista de cabeçalhos das colunas" },
         linhas: { type: "array", items: { type: "array", items: { type: "string" } }, description: "Dados das linhas (array de arrays)" },
@@ -27,7 +28,7 @@ registerTool("criar_planilha", {
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const filePath = String(args.caminho ?? "").trim();
+  const filePath = resolvePath(String(args.caminho ?? "").trim());
   const sheetName = String(args.aba ?? "Planilha1").trim();
   const headers = (args.cabecalhos as string[]) ?? [];
   const rows = (args.linhas as string[][]) ?? [];
@@ -110,7 +111,7 @@ registerTool("ler_planilha", {
     parameters: {
       type: "object",
       properties: {
-        caminho: { type: "string", description: "Caminho do arquivo" },
+        caminho: { type: "string", description: "Caminho do arquivo. Aceita atalhos como ~desktop, ~docs." },
         aba: { type: "string", description: "Nome da aba (padrão: primeira aba)" },
         maxLinhas: { type: "number", description: "Número máximo de linhas a retornar (padrão: 50)" },
       },
@@ -118,7 +119,7 @@ registerTool("ler_planilha", {
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const filePath = String(args.caminho ?? "").trim();
+  const filePath = resolvePath(String(args.caminho ?? "").trim());
   const sheetName = String(args.aba ?? "").trim();
   const maxRows = Number(args.maxLinhas ?? 50);
 
@@ -181,7 +182,7 @@ registerTool("editar_planilha", {
     parameters: {
       type: "object",
       properties: {
-        caminho: { type: "string", description: "Caminho da planilha .xlsx" },
+        caminho: { type: "string", description: "Caminho da planilha .xlsx. Aceita atalhos como ~desktop, ~docs." },
         aba: { type: "string", description: "Nome da aba (padrão: primeira aba)" },
         celulas: {
           type: "array",
@@ -205,7 +206,7 @@ registerTool("editar_planilha", {
     },
   },
 }, async (args: Record<string, unknown>) => {
-  const filePath = String(args.caminho ?? "").trim();
+  const filePath = resolvePath(String(args.caminho ?? "").trim());
   const sheetName = String(args.aba ?? "").trim();
   const cells = (args.celulas as { linha: number; coluna: number; valor: string }[]) ?? [];
   const newRows = (args.novasLinhas as string[][]) ?? [];

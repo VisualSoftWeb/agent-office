@@ -2,7 +2,7 @@ import type { LLMProvider, Message } from "../llm/types.js";
 import { getToolDefinitions } from "../tools/registry.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
-import { TaskGraph, type Plan } from "./task-graph.js";
+import { TaskGraph, type Plan, type PlanTask } from "./task-graph.js";
 export type { Plan };
 
 const PLAN_TRIGGERS = [
@@ -178,6 +178,74 @@ Use as ferramentas disponíveis para completar sua tarefa. Responda com o result
   return "[Task completed with no final output]";
 }
 
+async function verifyPlanCompletion(
+  llm: LLMProvider,
+  plan: Plan,
+  graph: TaskGraph,
+): Promise<{ complete: boolean; reason: string; remediation?: Plan }> {
+  const summary = graph.getSummary();
+  const allResults = graph.getAllResults();
+
+  if (graph.hasFailed()) {
+    const allGraphTasks = Array.from((graph as any).tasks.values()) as PlanTask[];
+    const failedTasks = allGraphTasks.filter((t) => t.status === "failed");
+    const failedDescriptions = failedTasks.map((t) => t.description).join("; ");
+    return { complete: false, reason: `Failed tasks: ${failedDescriptions}` };
+  }
+
+  const verificationMessages: Message[] = [
+    {
+      role: "system",
+      content: `You are a plan verifier. Given an objective and the results of executed tasks, determine if the objective was fully achieved.
+
+If COMPLETE, output: {"complete":true}
+If INCOMPLETE, output: {"complete":false,"reason":"why","remediation":{"objective":"...","tasks":[{"id":"1","description":"...","dependsOn":[]}]}}
+
+Tasks that have failed or produced insufficient results should be included in remediation with appropriate dependencies.`,
+    },
+    {
+      role: "user",
+      content: `Objective: ${plan.objective}\n\nExecution summary: ${summary}\n\nResults:\n${allResults}`,
+    },
+  ];
+
+  try {
+    const response = await llm.chat(verificationMessages);
+    if (!response.content) return { complete: true, reason: "No verification feedback" };
+
+    const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { complete: true, reason: "Could not parse verification" };
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (parsed.complete) return { complete: true, reason: "Plan verified complete" };
+
+    const remediation = parsed.remediation;
+    if (remediation && Array.isArray(remediation.tasks) && remediation.tasks.length > 0) {
+      const remappedTasks = remediation.tasks.map((t: any, i: number) => ({
+        id: `replan_${i + 1}`,
+        description: t.description || `Remediation step ${i + 1}`,
+        dependsOn: Array.isArray(t.dependsOn)
+          ? t.dependsOn.map((d: string) => {
+              const idx = parseInt(d, 10);
+              return isNaN(idx) ? d : `replan_${idx}`;
+            })
+          : [],
+        status: "pending" as const,
+      }));
+      return {
+        complete: false,
+        reason: parsed.reason || "Incomplete",
+        remediation: { objective: plan.objective, tasks: remappedTasks },
+      };
+    }
+
+    return { complete: false, reason: parsed.reason || "Incomplete (no remediation)" };
+  } catch (err) {
+    logger.warn(`[PLANNER] Verification LLM call failed: ${err}`);
+    return { complete: true, reason: "Verification skipped due to error" };
+  }
+}
+
 export async function executePlan(
   llm: LLMProvider,
   plan: Plan,
@@ -185,53 +253,77 @@ export async function executePlan(
   chatId?: number,
   skipApproval?: boolean,
 ): Promise<string> {
-  const graph = new TaskGraph();
-  graph.load(plan);
+  const maxAttempts = config.PLANNER_MAX_REPLAN_ATTEMPTS;
+  let currentPlan = plan;
 
-  logger.info(`[PLANNER] Executing plan with ${plan.tasks.length} tasks`);
+  for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+    const graph = new TaskGraph();
+    graph.load(currentPlan);
 
-  while (!graph.isComplete()) {
-    const readyTasks = graph.getReadyTasks();
-    if (readyTasks.length === 0 && !graph.hasFailed()) {
-      logger.warn("[PLANNER] Stuck: no ready tasks but not complete (possible cycle)");
-      break;
-    }
+    logger.info(`[PLANNER] Executing plan attempt ${attempt + 1}/${maxAttempts + 1} with ${currentPlan.tasks.length} tasks`);
 
-    const results = await Promise.all(
-      readyTasks.map(async (task) => {
-        graph.markRunning(task.id);
-        logger.info(`[PLANNER] Running task ${task.id}: ${task.description.slice(0, 80)}`);
-
-        try {
-          const previousResults = graph.getAllResults();
-          const result = await executeTask(
-            llm, task.description, plan.objective,
-            previousResults, userId, chatId, skipApproval
-          );
-          graph.markCompleted(task.id, result);
-          logger.info(`[PLANNER] Task ${task.id} completed`);
-          return { id: task.id, ok: true };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          graph.markFailed(task.id, msg);
-          logger.error(`[PLANNER] Task ${task.id} failed: ${msg}`);
-          return { id: task.id, ok: false, error: msg };
-        }
-      })
-    );
-
-    if (results.some((r) => !r.ok)) {
-      const failedTasks = results.filter((r) => !r.ok);
-      if (failedTasks.length === readyTasks.length) {
-        logger.warn("[PLANNER] All parallel tasks failed, aborting plan");
+    while (!graph.isComplete()) {
+      const readyTasks = graph.getReadyTasks();
+      if (readyTasks.length === 0 && !graph.hasFailed()) {
+        logger.warn("[PLANNER] Stuck: no ready tasks but not complete (possible cycle)");
         break;
       }
+
+      const results = await Promise.all(
+        readyTasks.map(async (task) => {
+          graph.markRunning(task.id);
+          logger.info(`[PLANNER] Running task ${task.id}: ${task.description.slice(0, 80)}`);
+
+          try {
+            const previousResults = graph.getAllResults();
+            const result = await executeTask(
+              llm, task.description, currentPlan.objective,
+              previousResults, userId, chatId, skipApproval
+            );
+            graph.markCompleted(task.id, result);
+            logger.info(`[PLANNER] Task ${task.id} completed`);
+            return { id: task.id, ok: true };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            graph.markFailed(task.id, msg);
+            logger.error(`[PLANNER] Task ${task.id} failed: ${msg}`);
+            return { id: task.id, ok: false, error: msg };
+          }
+        })
+      );
+
+      if (results.some((r) => !r.ok)) {
+        const failedTasks = results.filter((r) => !r.ok);
+        if (failedTasks.length === readyTasks.length) {
+          logger.warn("[PLANNER] All parallel tasks failed, aborting plan");
+          break;
+        }
+      }
     }
+
+    const summary = graph.getSummary();
+    const allResults = graph.getAllResults();
+    logger.info(`[PLANNER] ${summary}`);
+
+    // Fase 3: Verificação
+    if (attempt < maxAttempts) {
+      const verification = await verifyPlanCompletion(llm, currentPlan, graph);
+      if (verification.complete) {
+        logger.info(`[PLANNER] Plan verified complete on attempt ${attempt + 1}`);
+        return `[PLAN_RESULT]\n${summary}\n\nResults:\n${allResults}`;
+      }
+
+      if (verification.remediation) {
+        logger.info(`[PLANNER] Re-planning: ${verification.reason}`);
+        currentPlan = verification.remediation;
+        continue;
+      }
+
+      logger.warn(`[PLANNER] Verification incomplete but no remediation: ${verification.reason}`);
+    }
+
+    return `[PLAN_RESULT]\n${summary}\n\nResults:\n${allResults}`;
   }
 
-  const summary = graph.getSummary();
-  const allResults = graph.getAllResults();
-  logger.info(`[PLANNER] ${summary}`);
-
-  return `[PLAN_RESULT]\n${summary}\n\nResults:\n${allResults}`;
+  return "[PLAN_RESULT] Max re-plan attempts reached.";
 }
