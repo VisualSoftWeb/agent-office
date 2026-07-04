@@ -1,7 +1,8 @@
 import { getCRMDB, type FaturaRecord, type ClienteRecord } from "../../memory/crm-db.js";
 import { generateId, nowISO } from "../../utils/helpers.js";
 import { registerTool } from "../registry.js";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import pkg from "pdf-lib";
+const { PDFDocument, StandardFonts, rgb } = pkg;
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 

@@ -7,3 +7,8 @@ bot-out.log
 .env
 *.log
 deepseek_profile/
+agent.err
+agent.log
+start-agent.ps1
+LEMBRANÇAS.pdf
+pdf-forge-exports/

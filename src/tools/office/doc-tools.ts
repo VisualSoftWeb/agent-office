@@ -1,5 +1,6 @@
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType } from "docx";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import pkg from "pdf-lib";
+const { PDFDocument, StandardFonts, rgb } = pkg;
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { registerTool } from "../registry.js";

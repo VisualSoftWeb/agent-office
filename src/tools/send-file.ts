@@ -46,12 +46,16 @@ registerTool("send_file", {
       type: "object",
       properties: {
         filePath: { type: "string", description: "Path to the file to send. Accepts shortcuts like ~desktop, ~docs, ~downloads. Ex: ~desktop/foto.png" },
+        caption: { type: "string", description: "Text caption to accompany the file in the chat." },
+        parse_mode: { type: "string", enum: ["Markdown", "HTML"], description: "Formatting mode for the caption (optional)." },
       },
       required: ["filePath"],
     },
   },
 }, async (args, userId) => {
   const rawPath = String(args.filePath ?? "").trim();
+  const caption = args.caption ? String(args.caption).trim() : undefined;
+  const parseMode = args.parse_mode ? String(args.parse_mode).trim() : undefined;
   if (!rawPath || rawPath === "undefined") {
     return `Caminho do arquivo não informado. Use caminho completo ou atalho (ex: ~desktop/arquivo.png).`;
   }
@@ -82,6 +86,8 @@ registerTool("send_file", {
     const blob = new Blob([new Uint8Array(buf)], { type: "application/octet-stream" });
     const form = new FormData();
     form.append("chat_id", String(chatId));
+    if (caption) form.append("caption", caption);
+    if (parseMode) form.append("parse_mode", parseMode);
     form.append(IMAGE_EXTS.has(ext) ? "photo" : "document", blob, fileName);
 
     const endpoint = IMAGE_EXTS.has(ext) ? "sendPhoto" : "sendDocument";
@@ -101,7 +107,7 @@ registerTool("send_file", {
       return `Telegram retornou erro: ${data.description}`;
     }
 
-    return `Arquivo enviado: ${fileName} (${formatSize(s.size)})`;
+    return `Arquivo enviado: ${fileName} (${formatSize(s.size)})${caption ? ` com legenda: "${caption}"` : ""}`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return `Falha ao enviar "${path.basename(filePath)}": ${msg}`;
